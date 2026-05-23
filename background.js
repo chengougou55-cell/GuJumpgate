@@ -63,7 +63,9 @@ importScripts(
   'luckmail-utils.js',
   'cloudflare-temp-email-utils.js',
   'cloudmail-utils.js',
+  'outlook-email-utils.js',
   'background/cloudmail-provider.js',
+  'background/outlook-email-provider.js',
   'icloud-utils.js',
   'mail-provider-utils.js',
   'content/activation-utils.js'
@@ -319,6 +321,17 @@ const {
   normalizeCloudMailMailApiMessages,
 } = self.CloudMailUtils;
 const {
+  DEFAULT_API_KEY: DEFAULT_OUTLOOK_EMAIL_API_KEY,
+  DEFAULT_BASE_URL: DEFAULT_OUTLOOK_EMAIL_BASE_URL,
+  DEFAULT_MAIL_PAGE_SIZE: OUTLOOK_EMAIL_DEFAULT_PAGE_SIZE,
+  buildOutlookEmailHeaders,
+  joinOutlookEmailUrl,
+  normalizeOutlookEmailAccounts,
+  normalizeOutlookEmailAddress,
+  normalizeOutlookEmailBaseUrl,
+  normalizeOutlookEmailMailApiMessages,
+} = self.OutlookEmailUtils;
+const {
   findIcloudAliasByEmail,
   getConfiguredIcloudHostPreference,
   getIcloudHostHintFromMessage,
@@ -462,6 +475,8 @@ const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
 const CLOUD_MAIL_PROVIDER = 'cloudmail';
 const CLOUD_MAIL_GENERATOR = 'cloudmail';
+const OUTLOOK_EMAIL_PROVIDER = 'outlook-email';
+const OUTLOOK_EMAIL_GENERATOR = 'outlook-email';
 const CUSTOM_EMAIL_POOL_GENERATOR = 'custom-pool';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
@@ -483,7 +498,9 @@ const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY = '2KwVxE6f0ABH002JLkoQJ9Re
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
 const DEFAULT_SUB2API_PROXY_NAME = '';
 const DEFAULT_SUB2API_ACCOUNT_PRIORITY = 1;
-const DEFAULT_PANEL_MODE = 'local-cpa-json';
+const DEFAULT_PANEL_MODE = 'sub2api';
+const DEFAULT_LOCAL_CPA_JSON_PLUGIN_DIR = '/Users/huangzhiqiang/Desktop/gpt-account';
+const DEFAULT_ACCOUNT_PASSWORD = 'Kd!123456789';
 const CONTRIBUTION_SOURCE_CPA = 'cpa';
 const CONTRIBUTION_SOURCE_SUB2API = 'sub2api';
 const CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME = 'codex号池';
@@ -953,7 +970,7 @@ function setupDeclarativeNetRequestRules() {
 
 const PERSISTED_SETTING_DEFAULTS = {
   panelMode: DEFAULT_PANEL_MODE,
-  localCpaJsonPluginDir: '',
+  localCpaJsonPluginDir: DEFAULT_LOCAL_CPA_JSON_PLUGIN_DIR,
   localCpaJsonRelativeAuthDir: DEFAULT_LOCAL_CPA_JSON_RELATIVE_AUTH_DIR,
   vpsUrl: '',
   vpsPassword: '',
@@ -984,12 +1001,12 @@ const PERSISTED_SETTING_DEFAULTS = {
   ipProxyRegion: '',
   codex2apiUrl: DEFAULT_CODEX2API_URL,
   codex2apiAdminKey: '',
-  customPassword: '',
+  customPassword: DEFAULT_ACCOUNT_PASSWORD,
   plusModeEnabled: true,
   plusPaymentMethod: DEFAULT_PLUS_PAYMENT_METHOD,
   plusAccountAccessStrategy: PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH,
   plusHostedCheckoutOauthDelaySeconds: 10,
-  plusCheckoutCloudConversionEnabled: false,
+  plusCheckoutCloudConversionEnabled: true,
   plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
   plusCheckoutCloudConversionApiKey: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY,
   plusCheckoutConversionProxyUrl: '',
@@ -1055,7 +1072,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   operationDelayEnabled: true,
   autoRunDelayMinutes: 30,
   autoStepDelaySeconds: null,
-  step6CookieCleanupEnabled: false,
+  step6CookieCleanupEnabled: true,
   phoneVerificationEnabled: false,
   phoneSignupReloginAfterBindEmailEnabled: false,
   phoneSmsReuseEnabled: DEFAULT_HERO_SMS_REUSE_ENABLED,
@@ -1117,6 +1134,10 @@ const PERSISTED_SETTING_DEFAULTS = {
   cloudMailReceiveMailbox: '',
   cloudMailDomain: '',
   cloudMailDomains: [],
+  outlookEmailBaseUrl: DEFAULT_OUTLOOK_EMAIL_BASE_URL,
+  outlookEmailApiKey: DEFAULT_OUTLOOK_EMAIL_API_KEY,
+  outlookEmailReceiveMailbox: '',
+  outlookEmailUsedAddresses: [],
   hotmailAccounts: [],
   hotmailAliasEnabled: false,
   outlookAliasMaxPerAccount: OUTLOOK_ALIAS_DEFAULT_MAX_PER_ACCOUNT,
@@ -2321,6 +2342,7 @@ function normalizeEmailGenerator(value = '') {
   if (normalized === 'cloudflare') return 'cloudflare';
   if (normalized === CLOUDFLARE_TEMP_EMAIL_GENERATOR) return CLOUDFLARE_TEMP_EMAIL_GENERATOR;
   if (normalized === 'cloudmail') return 'cloudmail';
+  if (normalized === OUTLOOK_EMAIL_GENERATOR) return OUTLOOK_EMAIL_GENERATOR;
   return 'duck';
 }
 
@@ -2531,6 +2553,24 @@ async function markCurrentRegistrationAccountUsed(state = {}, options = {}) {
     }
   }
 
+  if (String(latestState.mailProvider || '').trim().toLowerCase() === OUTLOOK_EMAIL_PROVIDER) {
+    const currentEmail = String(latestState.email || '').trim();
+    if (currentEmail) {
+      const result = await setOutlookEmailAddressUsed(currentEmail, {
+        state: latestState,
+        logPrefix: reasonPrefix,
+        level: options.level || 'warn',
+      });
+      const usedAddresses = normalizeOutlookEmailUsedAddresses([
+        ...(latestState.outlookEmailUsedAddresses || []),
+        currentEmail,
+      ]);
+      await setState({ outlookEmailUsedAddresses: usedAddresses });
+      broadcastDataUpdate({ outlookEmailUsedAddresses: usedAddresses });
+      updated = Boolean(result?.updated) || updated;
+    }
+  }
+
   if (String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
     await patchMail2925Account(latestState.currentMail2925AccountId, {
       lastUsedAt: Date.now(),
@@ -2572,8 +2612,8 @@ function getCustomMailProviderPoolEmailForRun(state = {}, targetRun = 1) {
 
 function normalizePanelMode(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === DEFAULT_PANEL_MODE) {
-    return DEFAULT_PANEL_MODE;
+  if (normalized === 'local-cpa-json') {
+    return 'local-cpa-json';
   }
   if (normalized === 'local-cpa-json-no-rt') {
     return 'local-cpa-json-no-rt';
@@ -2622,6 +2662,7 @@ function normalizeMailProvider(value = '') {
     case LUCKMAIL_PROVIDER:
     case CLOUDFLARE_TEMP_EMAIL_PROVIDER:
     case CLOUD_MAIL_PROVIDER:
+    case OUTLOOK_EMAIL_PROVIDER:
     case '163':
     case '163-vip':
     case '126':
@@ -2860,6 +2901,36 @@ const {
   resolveCloudMailPollTargetEmail,
 } = cloudMailProvider;
 
+const outlookEmailProvider = self.MultiPageBackgroundOutlookEmailProvider.createOutlookEmailProvider({
+  addLog,
+  buildOutlookEmailHeaders,
+  DEFAULT_OUTLOOK_EMAIL_API_KEY,
+  DEFAULT_OUTLOOK_EMAIL_BASE_URL,
+  OUTLOOK_EMAIL_DEFAULT_PAGE_SIZE,
+  OUTLOOK_EMAIL_GENERATOR,
+  OUTLOOK_EMAIL_PROVIDER,
+  getState,
+  joinOutlookEmailUrl,
+  normalizeOutlookEmailAccounts,
+  normalizeOutlookEmailAddress,
+  normalizeOutlookEmailBaseUrl,
+  normalizeOutlookEmailMailApiMessages,
+  persistRegistrationEmailState,
+  pickVerificationMessageWithTimeFallback,
+  setEmailState,
+  setPersistentSettings,
+  sleepWithStop,
+  throwIfStopped,
+});
+const {
+  getOutlookEmailConfig,
+  normalizeOutlookEmailReceiveMailbox,
+  normalizeOutlookEmailUsedAddresses,
+  fetchOutlookEmailAddress,
+  pollOutlookEmailVerificationCode,
+  setOutlookEmailAddressUsed,
+} = outlookEmailProvider;
+
 function normalizeSub2ApiGroupNames(value = '') {
   const source = Array.isArray(value)
     ? value
@@ -2983,7 +3054,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'codex2apiAdminKey':
       return String(value || '').trim();
     case 'customPassword':
-      return String(value || '');
+      return String(value || '') || DEFAULT_ACCOUNT_PASSWORD;
     case 'signupMethod':
       return normalizeSignupMethod(value);
     case 'plusPaymentMethod':
@@ -3240,6 +3311,9 @@ function normalizePersistentSettingValue(key, value) {
         if (normalizedMailProvider === CLOUD_MAIL_PROVIDER) {
           return CLOUD_MAIL_PROVIDER;
         }
+        if (normalizedMailProvider === OUTLOOK_EMAIL_PROVIDER) {
+          return OUTLOOK_EMAIL_PROVIDER;
+        }
         return HOTMAIL_PROVIDER;
       }
     case 'mail2925Mode':
@@ -3330,6 +3404,14 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeCloudMailDomain(value);
     case 'cloudMailDomains':
       return normalizeCloudMailDomains(value);
+    case 'outlookEmailBaseUrl':
+      return normalizeOutlookEmailBaseUrl(value) || DEFAULT_OUTLOOK_EMAIL_BASE_URL;
+    case 'outlookEmailApiKey':
+      return String(value || '').trim();
+    case 'outlookEmailReceiveMailbox':
+      return normalizeOutlookEmailReceiveMailbox(value);
+    case 'outlookEmailUsedAddresses':
+      return normalizeOutlookEmailUsedAddresses(value);
     case 'hotmailAccounts':
       return normalizeHotmailAccounts(value);
     case 'hotmailAliasEnabled':
@@ -3477,6 +3559,9 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
       domains.unshift(payload.cloudMailDomain);
     }
     payload.cloudMailDomains = domains;
+  }
+  if (payload.outlookEmailUsedAddresses) {
+    payload.outlookEmailUsedAddresses = normalizeOutlookEmailUsedAddresses(payload.outlookEmailUsedAddresses);
   }
   if (
     Object.prototype.hasOwnProperty.call(payload, 'sub2apiGroupName')
@@ -3634,7 +3719,7 @@ async function setState(updates) {
 }
 
 function normalizeLocalCpaJsonPluginDir(rawValue = '') {
-  return String(rawValue || '').trim();
+  return String(rawValue || '').trim() || DEFAULT_LOCAL_CPA_JSON_PLUGIN_DIR;
 }
 
 function normalizeLocalCpaJsonRelativeAuthDir(rawValue = '') {
@@ -3947,7 +4032,7 @@ function buildContributionModeState(enabled, persistedSettings = {}, currentStat
     contributionMode: false,
     contributionModeExpected: false,
     panelMode: persistedSettings.panelMode || DEFAULT_STATE.panelMode,
-    customPassword: persistedSettings.customPassword || '',
+    customPassword: persistedSettings.customPassword || DEFAULT_ACCOUNT_PASSWORD,
     accountRunHistoryTextEnabled: Boolean(persistedSettings.accountRunHistoryTextEnabled),
   };
 }
@@ -8537,8 +8622,8 @@ function getPanelMode(state = {}) {
   if (typeof navigationUtils !== 'undefined' && navigationUtils?.getPanelMode) {
     return navigationUtils.getPanelMode(state);
   }
-  if (state.panelMode === DEFAULT_PANEL_MODE) {
-    return DEFAULT_PANEL_MODE;
+  if (state.panelMode === 'local-cpa-json') {
+    return 'local-cpa-json';
   }
   if (state.panelMode === 'local-cpa-json-no-rt') {
     return 'local-cpa-json-no-rt';
@@ -8557,7 +8642,7 @@ function getPanelModeLabel(modeOrState) {
     return navigationUtils.getPanelModeLabel(modeOrState);
   }
   const mode = typeof modeOrState === 'string' ? modeOrState : getPanelMode(modeOrState);
-  if (mode === DEFAULT_PANEL_MODE) {
+  if (mode === 'local-cpa-json') {
     return '本地CPA JSON 有RT';
   }
   if (mode === 'local-cpa-json-no-rt') {
@@ -11850,6 +11935,7 @@ function getEmailGeneratorLabel(generator) {
   if (generator === 'cloudflare') return 'Cloudflare 邮箱';
   if (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR) return 'Cloudflare Temp Email';
   if (generator === CLOUD_MAIL_GENERATOR) return 'Cloud Mail';
+  if (generator === OUTLOOK_EMAIL_GENERATOR) return 'outlookEmail';
   return 'Duck 邮箱';
 }
 const mail2925SessionManager = self.MultiPageBackgroundMail2925Session?.createMail2925SessionManager({
@@ -12029,6 +12115,9 @@ async function fetchGeneratedEmail(state, options = {}) {
   const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
   if (generator === CLOUD_MAIL_GENERATOR) {
     return fetchCloudMailAddress(currentState, options);
+  }
+  if (generator === OUTLOOK_EMAIL_GENERATOR) {
+    return fetchOutlookEmailAddress(currentState, options);
   }
   return generatedEmailHelpers.fetchGeneratedEmail(state, options);
 }
@@ -12638,7 +12727,10 @@ function shouldStopEmailAutoFetchRetries(generator, error) {
   if (generator === 'cloudflare' && /域名/.test(message)) {
     return true;
   }
-  return generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(message);
+  if (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(message)) {
+    return true;
+  }
+  return generator === OUTLOOK_EMAIL_GENERATOR && /(服务地址|API Key|没有返回可用邮箱)/i.test(message);
 }
 
 async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
@@ -13520,6 +13612,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   closeConflictingTabsForSource,
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   CLOUD_MAIL_PROVIDER,
+  OUTLOOK_EMAIL_PROVIDER,
   completeNodeFromBackground,
   confirmCustomVerificationStepBypassRequest: (step) => chrome.runtime.sendMessage({
     type: 'REQUEST_CUSTOM_VERIFICATION_BYPASS_CONFIRMATION',
@@ -13540,6 +13633,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   MAIL_2925_VERIFICATION_MAX_ATTEMPTS,
   pollCloudflareTempEmailVerificationCode,
   pollCloudMailVerificationCode,
+  pollOutlookEmailVerificationCode,
   pollHotmailVerificationCode,
   pollLuckmailVerificationCode,
   sendToContentScript,
@@ -13671,6 +13765,7 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   LUCKMAIL_PROVIDER,
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   CLOUD_MAIL_PROVIDER,
+  OUTLOOK_EMAIL_PROVIDER,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
   reuseOrCreateTab,
   sendToContentScript,
@@ -13729,6 +13824,7 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   chrome,
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   CLOUD_MAIL_PROVIDER,
+  OUTLOOK_EMAIL_PROVIDER,
   completeNodeFromBackground,
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
   ensureMail2925MailboxSession,
@@ -14345,6 +14441,9 @@ function getMailConfig(state) {
   }
   if (provider === 'cloudmail') {
     return { provider: 'cloudmail', label: 'Cloud Mail' };
+  }
+  if (provider === OUTLOOK_EMAIL_PROVIDER) {
+    return { provider: OUTLOOK_EMAIL_PROVIDER, label: 'outlookEmail' };
   }
   if (provider === '163') {
     return { source: 'mail-163', url: 'https://mail.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 邮箱' };

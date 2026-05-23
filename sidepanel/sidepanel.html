@@ -119,9 +119,9 @@
       <div class="data-row">
         <span class="data-label">导出至</span>
         <select id="select-panel-mode" class="data-select">
-          <option value="local-cpa-json" selected>本地CPA JSON</option>
+          <option value="local-cpa-json">本地CPA JSON</option>
           <option value="cpa">CPA 面板</option>
-          <option value="sub2api">SUB2API</option>
+          <option value="sub2api" selected>SUB2API</option>
           <option value="codex2api">Codex2API</option>
         </select>
       </div>
@@ -345,7 +345,7 @@
           <button id="btn-plus-checkout-conversion-proxy-test" class="btn btn-outline btn-sm data-inline-btn" type="button">测试代理</button>
           <label class="toggle-switch" for="input-plus-checkout-cloud-conversion-enabled"
             title="启用后由云端服务接收 accessToken 并生成支付链接；本地支付转换代理将自动停用">
-            <input type="checkbox" id="input-plus-checkout-cloud-conversion-enabled" />
+            <input type="checkbox" id="input-plus-checkout-cloud-conversion-enabled" checked />
             <span class="toggle-switch-track" aria-hidden="true">
               <span class="toggle-switch-thumb"></span>
             </span>
@@ -551,6 +551,7 @@
         <div class="data-inline">
           <select id="select-mail-provider" class="data-select">
             <option value="hotmail-api">Outlook/Hotmail 账号池</option>
+            <option value="outlook-email">outlookEmail</option>
             <option value="cloudflare-temp-email">Cloudflare Temp Email</option>
             <option value="cloudmail">Cloud Mail</option>
           </select>
@@ -579,6 +580,7 @@
           <option value="icloud">iCloud 隐私邮箱</option>
           <option value="cloudflare-temp-email">Cloudflare Temp Email</option>
           <option value="cloudmail">Cloud Mail</option>
+          <option value="outlook-email">outlookEmail</option>
         </select>
       </div>
       <div class="data-row data-check-row" id="row-custom-email-pool" style="display:none;">
@@ -693,7 +695,7 @@
           <div class="setting-group setting-group-primary step6-cookie-cleanup-setting">
             <span class="setting-caption setting-caption-left">清 Cookies</span>
             <label class="toggle-switch" for="input-step6-cookie-cleanup-enabled">
-              <input type="checkbox" id="input-step6-cookie-cleanup-enabled" />
+              <input type="checkbox" id="input-step6-cookie-cleanup-enabled" checked />
               <span class="toggle-switch-track" aria-hidden="true">
                 <span class="toggle-switch-thumb"></span>
               </span>
@@ -919,6 +921,33 @@
       <div class="data-row" id="row-cloud-mail-domain" style="display:none;">
         <span class="data-label">域名</span>
         <input type="text" id="input-cloud-mail-domain" class="data-input" placeholder="例如 mail.example.com" />
+      </div>
+    </div>
+    <div id="outlook-email-section" class="data-card hotmail-card" style="display:none;">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">outlookEmail</span>
+          <span class="data-value">对接 assast/outlookEmail 对外 API</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-outlook-email-base-url" style="display:none;">
+        <span class="data-label">API 地址</span>
+        <input type="text" id="input-outlook-email-base-url" class="data-input mono" placeholder="http://156.239.40.207:15000" />
+      </div>
+      <div class="data-row" id="row-outlook-email-api-key" style="display:none;">
+        <span class="data-label">API Key</span>
+        <div class="input-with-icon">
+          <input type="password" id="input-outlook-email-api-key" class="data-input data-input-with-icon mono"
+            placeholder="outlookEmail API Key" />
+          <button id="btn-toggle-outlook-email-api-key" class="input-icon-btn" type="button"
+            data-password-toggle="input-outlook-email-api-key" data-show-label="显示 outlookEmail API Key"
+            data-hide-label="隐藏 outlookEmail API Key" aria-label="显示 outlookEmail API Key" title="显示 outlookEmail API Key"></button>
+        </div>
+      </div>
+      <div class="data-row" id="row-outlook-email-receive-mailbox" style="display:none;">
+        <span class="data-label">邮件接收</span>
+        <input type="text" id="input-outlook-email-receive-mailbox" class="data-input"
+          placeholder="可选；注册邮箱转发到其他邮箱时填写实际接收邮箱" />
       </div>
     </div>
     <div id="hotmail-section" class="data-card hotmail-card" style="display:none;">
@@ -1843,6 +1872,8 @@
       <span class="section-label">日志</span>
       <div class="log-header-actions">
         <button id="btn-open-account-records" class="btn btn-ghost btn-xs" title="查看账号记录">记录</button>
+        <button id="btn-copy-log" class="btn btn-ghost btn-xs" type="button" title="一键复制当前日志">复制</button>
+        <button id="btn-export-log-txt" class="btn btn-ghost btn-xs" type="button" title="一键导出当前日志 TXT">导出TXT</button>
         <button id="btn-clear-log" class="btn btn-ghost btn-xs" title="清空日志">清空</button>
       </div>
     </div>
@@ -1929,6 +1960,7 @@
   <script src="../mail-provider-utils.js"></script>
   <script src="../hotmail-utils.js"></script>
   <script src="../luckmail-utils.js"></script>
+  <script src="../outlook-email-utils.js"></script>
   <script src="../shared/flow-capabilities.js"></script>
   <script src="../data/step-definitions.js"></script>
   <script src="update-service.js"></script>

@@ -2,7 +2,7 @@
   root.MultiPageFlowCapabilities = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createFlowCapabilitiesModule() {
   const DEFAULT_FLOW_ID = 'openai';
-  const DEFAULT_PANEL_MODE = 'local-cpa-json';
+  const DEFAULT_PANEL_MODE = 'sub2api';
   const LOCAL_CPA_JSON_NO_RT_PANEL_MODE = 'local-cpa-json-no-rt';
   const SIGNUP_METHOD_EMAIL = 'email';
   const SIGNUP_METHOD_PHONE = 'phone';

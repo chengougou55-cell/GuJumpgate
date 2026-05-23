@@ -76,6 +76,8 @@ const autoScheduleMeta = document.getElementById('auto-schedule-meta');
 const btnAutoRunNow = document.getElementById('btn-auto-run-now');
 const btnAutoCancelSchedule = document.getElementById('btn-auto-cancel-schedule');
 const btnClearLog = document.getElementById('btn-clear-log');
+const btnCopyLog = document.getElementById('btn-copy-log');
+const btnExportLogTxt = document.getElementById('btn-export-log-txt');
 const configMenuShell = document.getElementById('config-menu-shell');
 const btnConfigMenu = document.getElementById('btn-config-menu');
 const configMenu = document.getElementById('config-menu');
@@ -319,6 +321,13 @@ const inputCloudMailAdminEmail = document.getElementById('input-cloud-mail-admin
 const inputCloudMailAdminPassword = document.getElementById('input-cloud-mail-admin-password');
 const inputCloudMailReceiveMailbox = document.getElementById('input-cloud-mail-receive-mailbox');
 const inputCloudMailDomain = document.getElementById('input-cloud-mail-domain');
+const outlookEmailSection = document.getElementById('outlook-email-section');
+const rowOutlookEmailBaseUrl = document.getElementById('row-outlook-email-base-url');
+const rowOutlookEmailApiKey = document.getElementById('row-outlook-email-api-key');
+const rowOutlookEmailReceiveMailbox = document.getElementById('row-outlook-email-receive-mailbox');
+const inputOutlookEmailBaseUrl = document.getElementById('input-outlook-email-base-url');
+const inputOutlookEmailApiKey = document.getElementById('input-outlook-email-api-key');
+const inputOutlookEmailReceiveMailbox = document.getElementById('input-outlook-email-receive-mailbox');
 const hotmailSection = document.getElementById('hotmail-section');
 const mail2925Section = document.getElementById('mail2925-section');
 const luckmailSection = document.getElementById('luckmail-section');
@@ -595,6 +604,7 @@ let hostedSmsPoolExpanded = false;
 let localCpaJsonAuthDirExpanded = false;
 let phoneSignupReuseUiWasLocked = false;
 let lastConfirmedOperationDelayEnabled = true;
+let renderedLogEntries = [];
 let heroSmsCountrySelectionOrder = [];
 let phoneSmsProviderOrderSelection = [];
 let heroSmsCountryMenuSearchKeyword = '';
@@ -822,8 +832,10 @@ const HERO_SMS_COUNTRY_ISO_CODE_BY_NAME = (() => {
 })();
 const LOCAL_CPA_JSON_PANEL_MODE = 'local-cpa-json';
 const LOCAL_CPA_JSON_NO_RT_PANEL_MODE = 'local-cpa-json-no-rt';
-const DEFAULT_PANEL_MODE = LOCAL_CPA_JSON_PANEL_MODE;
+const DEFAULT_PANEL_MODE = 'sub2api';
+const DEFAULT_LOCAL_CPA_JSON_PLUGIN_DIR = '/Users/huangzhiqiang/Desktop/gpt-account';
 const DEFAULT_LOCAL_CPA_JSON_RELATIVE_AUTH_DIR = '.cli-proxy-api';
+const DEFAULT_ACCOUNT_PASSWORD = 'Kd!123456789';
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 const DEFAULT_CPA_CALLBACK_MODE = 'step8';
 const MAIL_2925_MODE_PROVIDE = 'provide';
@@ -1092,7 +1104,11 @@ const HOTMAIL_PROVIDER = 'hotmail-api';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
 const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const CLOUD_MAIL_PROVIDER = 'cloudmail';
+const OUTLOOK_EMAIL_PROVIDER = 'outlook-email';
+const OUTLOOK_EMAIL_GENERATOR = 'outlook-email';
 const CUSTOM_EMAIL_POOL_GENERATOR = 'custom-pool';
+const DEFAULT_OUTLOOK_EMAIL_BASE_URL = window.OutlookEmailUtils?.DEFAULT_BASE_URL || 'http://156.239.40.207:15000';
+const DEFAULT_OUTLOOK_EMAIL_API_KEY = window.OutlookEmailUtils?.DEFAULT_API_KEY || 'ad9f6283fdee7ad92e6b2adef5a45050';
 const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
 const DEFAULT_LUCKMAIL_EMAIL_TYPE = 'ms_graph';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
@@ -2421,6 +2437,64 @@ function downloadTextFile(content, fileName, mimeType = 'application/json;charse
   setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
+function clearRenderedLogs() {
+  renderedLogEntries = [];
+  if (logArea) {
+    logArea.innerHTML = '';
+  }
+}
+
+function getCurrentLogEntries() {
+  return renderedLogEntries;
+}
+
+function normalizeLogLevel(level) {
+  return String(level || 'info').trim().toLowerCase().replace(/[^\w-]/g, '') || 'info';
+}
+
+function formatLogTimestamp(timestamp, options = {}) {
+  const date = new Date(timestamp || Date.now());
+  const localeOptions = {
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
+    ...(options.includeDate
+      ? {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }
+      : {}),
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  };
+  return date.toLocaleString('zh-CN', localeOptions).replace(/\//g, '-');
+}
+
+function formatLogEntryAsText(entry = {}) {
+  const level = normalizeLogLevel(entry.level);
+  const levelLabel = LOG_LEVEL_LABELS[level] || level;
+  const normalizedStep = Math.floor(Number(entry.step) || 0);
+  const stepLabel = normalizedStep > 0 ? ` 步${normalizedStep}` : '';
+  return `[${formatLogTimestamp(entry.timestamp, { includeDate: true })}] [${levelLabel}]${stepLabel} ${String(entry.message || '')}`;
+}
+
+function buildCurrentLogText() {
+  return getCurrentLogEntries()
+    .filter(Boolean)
+    .map(formatLogEntryAsText)
+    .join('\n')
+    .trim();
+}
+
+function buildLogExportFileName() {
+  const timestamp = new Date().toLocaleString('sv-SE', {
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
+  }).replace(/[-:]/g, '').replace(' ', '-');
+  return `gujumpgate-log-${timestamp}.txt`;
+}
+
 function setCurrentSessionExportButtonsDisabled(disabled) {
   [
     btnExportCurrentSessionCpaJson,
@@ -3131,6 +3205,9 @@ function normalizeSupportedMailProvider(value = '') {
   if (normalized === CLOUD_MAIL_PROVIDER) {
     return CLOUD_MAIL_PROVIDER;
   }
+  if (normalized === OUTLOOK_EMAIL_PROVIDER) {
+    return OUTLOOK_EMAIL_PROVIDER;
+  }
   return HOTMAIL_PROVIDER;
 }
 
@@ -3503,6 +3580,15 @@ function normalizeCloudMailDomainValue(value = '') {
   return normalizeCloudflareDomainValue(value);
 }
 
+function normalizeOutlookEmailBaseUrlValue(value = '') {
+  const normalized = normalizeCloudflareTempEmailBaseUrlValue(value);
+  return normalized || DEFAULT_OUTLOOK_EMAIL_BASE_URL;
+}
+
+function normalizeOutlookEmailReceiveMailboxValue(value = '') {
+  return normalizeCloudflareTempEmailReceiveMailboxValue(value);
+}
+
 function getCloudflareDomainsFromState() {
   const domains = normalizeCloudflareDomains(latestState?.cloudflareDomains || []);
   const activeDomain = normalizeCloudflareDomainValue(latestState?.cloudflareDomain || '');
@@ -3590,6 +3676,18 @@ function applyCloudMailSettingsState(state = {}) {
   }
   if (inputCloudMailDomain) {
     inputCloudMailDomain.value = state?.cloudMailDomain || '';
+  }
+}
+
+function applyOutlookEmailSettingsState(state = {}) {
+  if (inputOutlookEmailBaseUrl) {
+    inputOutlookEmailBaseUrl.value = state?.outlookEmailBaseUrl || DEFAULT_OUTLOOK_EMAIL_BASE_URL;
+  }
+  if (inputOutlookEmailApiKey) {
+    inputOutlookEmailApiKey.value = state?.outlookEmailApiKey || DEFAULT_OUTLOOK_EMAIL_API_KEY;
+  }
+  if (inputOutlookEmailReceiveMailbox) {
+    inputOutlookEmailReceiveMailbox.value = state?.outlookEmailReceiveMailbox || '';
   }
 }
 
@@ -4420,13 +4518,16 @@ function collectSettingsPayload() {
     cloudMailAdminPassword: (typeof inputCloudMailAdminPassword !== 'undefined' && inputCloudMailAdminPassword) ? inputCloudMailAdminPassword.value : '',
     cloudMailReceiveMailbox: normalizeCloudMailReceiveMailboxInput((typeof inputCloudMailReceiveMailbox !== 'undefined' && inputCloudMailReceiveMailbox) ? inputCloudMailReceiveMailbox.value : ''),
     cloudMailDomain: normalizeCloudMailDomainInput((typeof inputCloudMailDomain !== 'undefined' && inputCloudMailDomain) ? inputCloudMailDomain.value : ''),
+    outlookEmailBaseUrl: normalizeOutlookEmailBaseUrlValue((typeof inputOutlookEmailBaseUrl !== 'undefined' && inputOutlookEmailBaseUrl) ? inputOutlookEmailBaseUrl.value : DEFAULT_OUTLOOK_EMAIL_BASE_URL),
+    outlookEmailApiKey: ((typeof inputOutlookEmailApiKey !== 'undefined' && inputOutlookEmailApiKey) ? inputOutlookEmailApiKey.value : DEFAULT_OUTLOOK_EMAIL_API_KEY).trim(),
+    outlookEmailReceiveMailbox: normalizeOutlookEmailReceiveMailboxValue((typeof inputOutlookEmailReceiveMailbox !== 'undefined' && inputOutlookEmailReceiveMailbox) ? inputOutlookEmailReceiveMailbox.value : ''),
     autoRunSkipFailures: inputAutoSkipFailures.checked,
     autoRunRetryNonFreeTrial: Boolean(inputAutoRunRetryNonFreeTrial?.checked),
     autoRunRetryPaypalCallback: Boolean(inputAutoRunRetryPaypalCallback?.checked),
     autoRunFallbackThreadIntervalMinutes: normalizeAutoRunThreadIntervalMinutes(inputAutoSkipFailuresThreadIntervalMinutes.value),
     step6CookieCleanupEnabled: typeof inputStep6CookieCleanupEnabled !== 'undefined' && inputStep6CookieCleanupEnabled
       ? Boolean(inputStep6CookieCleanupEnabled.checked)
-      : false,
+      : true,
     autoRunDelayEnabled: inputAutoDelayEnabled.checked,
     autoRunDelayMinutes: normalizeAutoDelayMinutes(inputAutoDelayMinutes.value),
     autoStepDelaySeconds: normalizeAutoStepDelaySeconds(inputAutoStepDelaySeconds.value),
@@ -4435,7 +4536,7 @@ function collectSettingsPayload() {
       : 0,
     plusCheckoutCloudConversionEnabled: typeof inputPlusCheckoutCloudConversionEnabled !== 'undefined' && inputPlusCheckoutCloudConversionEnabled
       ? Boolean(inputPlusCheckoutCloudConversionEnabled.checked)
-      : false,
+      : true,
     plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
     plusCheckoutCloudConversionApiKey: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY,
     plusCheckoutConversionProxyUrl: typeof inputPlusCheckoutConversionProxy !== 'undefined' && inputPlusCheckoutConversionProxy
@@ -8312,7 +8413,7 @@ function getSelectedExportSettings() {
 }
 
 function normalizeLocalCpaJsonPluginDirValue(value = '') {
-  return String(value || '').trim();
+  return String(value || '').trim() || DEFAULT_LOCAL_CPA_JSON_PLUGIN_DIR;
 }
 
 function normalizeLocalCpaJsonRelativeAuthDirValue(value = '') {
@@ -9954,7 +10055,7 @@ function applySettingsState(state) {
     ? normalizeLocalCpaJsonRelativeAuthDirValue
     : ((value) => String(value || '').trim() || '.cli-proxy-api');
   if (typeof inputLocalCpaJsonPluginDir !== 'undefined' && inputLocalCpaJsonPluginDir) {
-    inputLocalCpaJsonPluginDir.value = state?.localCpaJsonPluginDir || '';
+    inputLocalCpaJsonPluginDir.value = normalizeLocalCpaJsonPluginDirValue(state?.localCpaJsonPluginDir);
   }
   if (typeof inputLocalCpaJsonRelativeAuthDir !== 'undefined' && inputLocalCpaJsonRelativeAuthDir) {
     inputLocalCpaJsonRelativeAuthDir.value = localCpaJsonRelativeAuthDirNormalizer(state?.localCpaJsonRelativeAuthDir);
@@ -10100,6 +10201,8 @@ function applySettingsState(state) {
       selectEmailGenerator.value = 'cloudflare-temp-email';
     } else if (restoredEmailGenerator === 'cloudmail') {
       selectEmailGenerator.value = 'cloudmail';
+    } else if (restoredEmailGenerator === OUTLOOK_EMAIL_GENERATOR) {
+      selectEmailGenerator.value = OUTLOOK_EMAIL_GENERATOR;
     } else {
       selectEmailGenerator.value = 'duck';
     }
@@ -10166,6 +10269,9 @@ function applySettingsState(state) {
   if (typeof applyCloudMailSettingsState === 'function') {
     applyCloudMailSettingsState(state);
   }
+  if (typeof applyOutlookEmailSettingsState === 'function') {
+    applyOutlookEmailSettingsState(state);
+  }
   renderCloudflareDomainOptions(state?.cloudflareDomain || '');
   setCloudflareDomainEditMode(false, { clearInput: true });
   inputAutoSkipFailures.checked = Boolean(state?.autoRunSkipFailures);
@@ -10177,7 +10283,9 @@ function applySettingsState(state) {
   }
   inputAutoSkipFailuresThreadIntervalMinutes.value = String(normalizeAutoRunThreadIntervalMinutes(state?.autoRunFallbackThreadIntervalMinutes));
   if (typeof inputStep6CookieCleanupEnabled !== 'undefined' && inputStep6CookieCleanupEnabled) {
-    inputStep6CookieCleanupEnabled.checked = Boolean(state?.step6CookieCleanupEnabled);
+    inputStep6CookieCleanupEnabled.checked = state?.step6CookieCleanupEnabled !== undefined
+      ? Boolean(state.step6CookieCleanupEnabled)
+      : true;
   }
   inputAutoDelayEnabled.checked = Boolean(state?.autoRunDelayEnabled);
   inputAutoDelayMinutes.value = String(normalizeAutoDelayMinutes(state?.autoRunDelayMinutes));
@@ -10910,7 +11018,9 @@ async function refreshContributionContentHint() {
 }
 
 function syncPasswordField(state) {
-  inputPassword.value = state?.contributionMode ? '' : (state.customPassword || state.password || '');
+  inputPassword.value = state?.contributionMode
+    ? ''
+    : (state?.customPassword || state?.password || DEFAULT_ACCOUNT_PASSWORD);
 }
 
 function isCustomMailProvider(provider = selectMailProvider.value) {
@@ -10969,6 +11079,7 @@ function getSelectedEmailGenerator() {
   if (generator === 'cloudflare') return 'cloudflare';
   if (generator === 'cloudflare-temp-email') return 'cloudflare-temp-email';
   if (generator === 'cloudmail') return 'cloudmail';
+  if (generator === OUTLOOK_EMAIL_GENERATOR) return OUTLOOK_EMAIL_GENERATOR;
   return 'duck';
 }
 
@@ -11022,6 +11133,14 @@ function getEmailGeneratorUiCopy() {
       placeholder: '点击生成 Cloud Mail 邮箱，或手动粘贴邮箱',
       successVerb: '生成',
       label: 'Cloud Mail',
+    };
+  }
+  if (getSelectedEmailGenerator() === OUTLOOK_EMAIL_GENERATOR) {
+    return {
+      buttonLabel: '取邮箱',
+      placeholder: '从 outlookEmail 账号池取用邮箱，也可以手动粘贴邮箱',
+      successVerb: '取用',
+      label: 'outlookEmail',
     };
   }
 
@@ -11421,6 +11540,7 @@ function updateMailProviderUI() {
   const useCustomEmail = isCustomMailProvider();
   const useCloudflareTempEmailProvider = selectMailProvider.value === 'cloudflare-temp-email';
   const useCloudMailProvider = selectMailProvider.value === 'cloudmail';
+  const useOutlookEmailProvider = selectMailProvider.value === OUTLOOK_EMAIL_PROVIDER;
   const gmailAliasGenerator = typeof GMAIL_ALIAS_GENERATOR === 'string'
     ? GMAIL_ALIAS_GENERATOR
     : 'gmail-alias';
@@ -11433,7 +11553,9 @@ function updateMailProviderUI() {
       ? new Set(['cloudflare-temp-email'])
       : (useCloudMailProvider
         ? new Set(['cloudmail'])
-        : (useGmail ? new Set([gmailAliasGenerator, customEmailPoolGenerator]) : null)));
+        : (useOutlookEmailProvider
+          ? new Set([OUTLOOK_EMAIL_GENERATOR])
+          : (useGmail ? new Set([gmailAliasGenerator, customEmailPoolGenerator]) : null))));
   Array.from(selectEmailGenerator?.options || []).forEach((option) => {
     if (!option) return;
     const optionValue = String(option.value || '').trim().toLowerCase();
@@ -11462,6 +11584,9 @@ function updateMailProviderUI() {
   if (useCloudMailProvider && String(selectEmailGenerator?.value || '').trim().toLowerCase() !== 'cloudmail') {
     selectEmailGenerator.value = 'cloudmail';
   }
+  if (useOutlookEmailProvider && String(selectEmailGenerator?.value || '').trim().toLowerCase() !== OUTLOOK_EMAIL_GENERATOR) {
+    selectEmailGenerator.value = OUTLOOK_EMAIL_GENERATOR;
+  }
   const useEmailGenerator = !useHotmail && !useLuckmail && !useCustomEmail && (!useGeneratedAlias || useGmail);
   const aliasUiCopy = useGeneratedAlias
     ? getManagedAliasProviderUiCopy(selectMailProvider.value, mail2925Mode)
@@ -11486,6 +11611,7 @@ function updateMailProviderUI() {
   const useIcloud = selectedGenerator === 'icloud';
   const useCloudflareTempEmailGenerator = selectedGenerator === 'cloudflare-temp-email';
   const useCloudMailGenerator = selectedGenerator === 'cloudmail';
+  const useOutlookEmailGenerator = selectedGenerator === OUTLOOK_EMAIL_GENERATOR;
   const showCloudflareDomain = useEmailGenerator && useCloudflare;
   const showCloudflareTempEmailSettings = useCloudflareTempEmailProvider || (useEmailGenerator && useCloudflareTempEmailGenerator);
   const showCloudflareTempEmailLookupMode = useCloudflareTempEmailProvider;
@@ -11502,6 +11628,8 @@ function updateMailProviderUI() {
   const showCloudMailSettings = useCloudMailProvider || (useEmailGenerator && useCloudMailGenerator);
   const showCloudMailReceiveMailbox = useCloudMailProvider && !useCloudMailGenerator;
   const showCloudMailDomain = useEmailGenerator && useCloudMailGenerator;
+  const showOutlookEmailSettings = useOutlookEmailProvider || (useEmailGenerator && useOutlookEmailGenerator);
+  const showOutlookEmailReceiveMailbox = useOutlookEmailProvider && !useOutlookEmailGenerator;
   const selectedIcloudHost = typeof getSelectedIcloudHostPreference === 'function'
     ? getSelectedIcloudHostPreference()
     : (normalizeIcloudHostValue(icloudHostPreferenceValue || latestState?.icloudHostPreference || '')
@@ -11535,6 +11663,12 @@ function updateMailProviderUI() {
   if (typeof rowCloudMailAdminPassword !== 'undefined' && rowCloudMailAdminPassword) rowCloudMailAdminPassword.style.display = showCloudMailSettings ? '' : 'none';
   if (typeof rowCloudMailReceiveMailbox !== 'undefined' && rowCloudMailReceiveMailbox) rowCloudMailReceiveMailbox.style.display = showCloudMailReceiveMailbox ? '' : 'none';
   if (typeof rowCloudMailDomain !== 'undefined' && rowCloudMailDomain) rowCloudMailDomain.style.display = showCloudMailDomain ? '' : 'none';
+  if (typeof outlookEmailSection !== 'undefined' && outlookEmailSection) {
+    outlookEmailSection.style.display = showOutlookEmailSettings ? '' : 'none';
+  }
+  if (typeof rowOutlookEmailBaseUrl !== 'undefined' && rowOutlookEmailBaseUrl) rowOutlookEmailBaseUrl.style.display = showOutlookEmailSettings ? '' : 'none';
+  if (typeof rowOutlookEmailApiKey !== 'undefined' && rowOutlookEmailApiKey) rowOutlookEmailApiKey.style.display = showOutlookEmailSettings ? '' : 'none';
+  if (typeof rowOutlookEmailReceiveMailbox !== 'undefined' && rowOutlookEmailReceiveMailbox) rowOutlookEmailReceiveMailbox.style.display = showOutlookEmailReceiveMailbox ? '' : 'none';
   if (icloudSection) {
     const showIcloudSection = (useEmailGenerator && useIcloud) || useIcloudProvider;
     icloudSection.style.display = showIcloudSection ? '' : 'none';
@@ -11602,6 +11736,7 @@ function updateMailProviderUI() {
     || useCustomEmail
     || useCloudflareTempEmailProvider
     || useCloudMailProvider
+    || useOutlookEmailProvider
     || (useGeneratedAlias && !useGmail);
   if (useGmail) {
     labelEmailPrefix.textContent = 'Gmail 原邮箱';
@@ -11629,7 +11764,7 @@ function updateMailProviderUI() {
   if (typeof rowOutlookAliasMax !== 'undefined' && rowOutlookAliasMax) {
     rowOutlookAliasMax.style.display = useHotmail && hotmailAliasEnabled ? '' : 'none';
   }
-  btnFetchEmail.hidden = useHotmail || useLuckmail || useCustomEmail || useCustomEmailPool;
+  btnFetchEmail.hidden = useHotmail || useLuckmail || useCustomEmail || useCustomEmailPool || useOutlookEmailProvider;
   inputEmail.readOnly = useHotmail || useLuckmail;
   inputEmail.placeholder = useHotmail
     ? '由 微软邮箱账户池 自动分配'
@@ -11681,6 +11816,11 @@ function updateMailProviderUI() {
   }
   if (autoHintText && showCloudflareTempEmailReceiveMailbox && !useCustomEmailPool) {
     autoHintText.textContent = '若注册邮箱会转发到 Cloudflare Temp Email，请在“邮件接收”中填写实际接收转发邮件的邮箱。';
+  }
+  if (autoHintText && showOutlookEmailSettings && !useCustomEmailPool) {
+    autoHintText.textContent = useOutlookEmailProvider
+      ? 'outlookEmail 会从远端账号池取邮箱，并通过对外邮件 API 自动轮询验证码。'
+      : '可从 outlookEmail 对外账号池取用邮箱并自动收码。';
   }
   if (autoHintText && showCloudflareTempEmailRandomSubdomainToggle && inputTempEmailUseRandomSubdomain?.checked) {
     autoHintText.textContent = '已启用随机子域名：扩展会按当前选中的 Temp 域名提交，并额外携带 enableRandomSubdomain；是否生效取决于后端 RANDOM_SUBDOMAIN_DOMAINS 配置。';
@@ -12440,23 +12580,27 @@ function updateStatusDisplay(state) {
 }
 
 function appendLog(entry) {
-  const time = new Date(entry.timestamp).toLocaleTimeString('zh-CN', {
-    hour12: false,
-    timeZone: DISPLAY_TIMEZONE,
-  });
-  const levelLabel = LOG_LEVEL_LABELS[entry.level] || entry.level;
+  const normalizedEntry = {
+    ...(entry || {}),
+    timestamp: entry?.timestamp || Date.now(),
+    level: normalizeLogLevel(entry?.level),
+    message: String(entry?.message || ''),
+  };
+  renderedLogEntries.push(normalizedEntry);
+  const time = formatLogTimestamp(normalizedEntry.timestamp);
+  const levelLabel = LOG_LEVEL_LABELS[normalizedEntry.level] || normalizedEntry.level;
   const line = document.createElement('div');
-  line.className = `log-line log-${entry.level}`;
+  line.className = `log-line log-${normalizedEntry.level}`;
 
-  const normalizedStep = Math.floor(Number(entry.step) || 0);
+  const normalizedStep = Math.floor(Number(normalizedEntry.step) || 0);
   const stepNum = normalizedStep > 0 ? String(normalizedStep) : null;
 
   let html = `<span class="log-time">${time}</span> `;
-  html += `<span class="log-level log-level-${entry.level}">${levelLabel}</span> `;
+  html += `<span class="log-level log-level-${normalizedEntry.level}">${levelLabel}</span> `;
   if (stepNum) {
     html += `<span class="log-step-tag step-${stepNum}">步${stepNum}</span>`;
   }
-  html += `<span class="log-msg">${escapeHtml(entry.message)}</span>`;
+  html += `<span class="log-msg">${escapeHtml(normalizedEntry.message)}</span>`;
 
   line.innerHTML = html;
   logArea.appendChild(line);
@@ -13946,7 +14090,7 @@ btnReset.addEventListener('click', async () => {
   }
   displayStatus.textContent = '就绪';
   statusBar.className = 'status-bar';
-  logArea.innerHTML = '';
+  clearRenderedLogs();
   resetIcloudManager();
   document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
   document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
@@ -13965,7 +14109,29 @@ btnReset.addEventListener('click', async () => {
 
 // Clear log
 btnClearLog.addEventListener('click', () => {
-  logArea.innerHTML = '';
+  clearRenderedLogs();
+});
+
+btnCopyLog?.addEventListener('click', async () => {
+  try {
+    await copyTextToClipboard(buildCurrentLogText());
+    showToast('日志已复制到剪贴板。', 'success', 1600);
+  } catch (err) {
+    showToast(err?.message || '复制日志失败。', 'error', 2600);
+  }
+});
+
+btnExportLogTxt?.addEventListener('click', () => {
+  try {
+    const logText = buildCurrentLogText();
+    if (!logText) {
+      throw new Error('没有可导出的日志。');
+    }
+    downloadTextFile(`${logText}\n`, buildLogExportFileName(), 'text/plain;charset=utf-8');
+    showToast('日志 TXT 已导出。', 'success', 1600);
+  } catch (err) {
+    showToast(err?.message || '导出日志失败。', 'error', 2600);
+  }
 });
 
 btnExportCurrentSessionCpaJson?.addEventListener('click', () => {
@@ -14043,12 +14209,17 @@ inputVpsPassword.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
-[inputHotmailRemoteBaseUrl, inputHotmailLocalBaseUrl].forEach((input) => {
+[inputHotmailRemoteBaseUrl, inputHotmailLocalBaseUrl, inputOutlookEmailBaseUrl, inputOutlookEmailApiKey, inputOutlookEmailReceiveMailbox].forEach((input) => {
   input?.addEventListener('input', () => {
     markSettingsDirty(true);
     scheduleSettingsAutoSave();
   });
   input?.addEventListener('blur', () => {
+    if (input === inputOutlookEmailBaseUrl) {
+      input.value = normalizeOutlookEmailBaseUrlValue(input.value);
+    } else if (input === inputOutlookEmailReceiveMailbox) {
+      input.value = normalizeOutlookEmailReceiveMailboxValue(input.value);
+    }
     saveSettings({ silent: true }).catch(() => { });
   });
 });
@@ -16399,7 +16570,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       displayStatus.textContent = '就绪';
       statusBar.className = 'status-bar';
-      logArea.innerHTML = '';
+      clearRenderedLogs();
       resetIcloudManager();
       resetLuckmailManager();
       resetCustomEmailPoolManager();
@@ -16671,6 +16842,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.cloudMailDomain !== undefined && inputCloudMailDomain) {
         inputCloudMailDomain.value = message.payload.cloudMailDomain || '';
+      }
+      if (message.payload.outlookEmailBaseUrl !== undefined && inputOutlookEmailBaseUrl) {
+        inputOutlookEmailBaseUrl.value = message.payload.outlookEmailBaseUrl || DEFAULT_OUTLOOK_EMAIL_BASE_URL;
+      }
+      if (message.payload.outlookEmailApiKey !== undefined && inputOutlookEmailApiKey) {
+        inputOutlookEmailApiKey.value = message.payload.outlookEmailApiKey || DEFAULT_OUTLOOK_EMAIL_API_KEY;
+      }
+      if (message.payload.outlookEmailReceiveMailbox !== undefined && inputOutlookEmailReceiveMailbox) {
+        inputOutlookEmailReceiveMailbox.value = message.payload.outlookEmailReceiveMailbox || '';
       }
       if (message.payload.plusModeEnabled !== undefined && inputPlusModeEnabled) {
         inputPlusModeEnabled.checked = Boolean(message.payload.plusModeEnabled);

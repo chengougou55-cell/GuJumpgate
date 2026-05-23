@@ -1,0 +1,349 @@
+(function outlookEmailProviderModule(root, factory) {
+  root.MultiPageBackgroundOutlookEmailProvider = factory();
+})(typeof self !== 'undefined' ? self : globalThis, function createOutlookEmailProviderModule() {
+  function createOutlookEmailProvider(deps = {}) {
+    const {
+      addLog = async () => {},
+      buildOutlookEmailHeaders,
+      DEFAULT_OUTLOOK_EMAIL_API_KEY = '',
+      DEFAULT_OUTLOOK_EMAIL_BASE_URL = '',
+      OUTLOOK_EMAIL_DEFAULT_PAGE_SIZE = 20,
+      OUTLOOK_EMAIL_GENERATOR = 'outlook-email',
+      OUTLOOK_EMAIL_PROVIDER = 'outlook-email',
+      fetchImpl = typeof fetch === 'function' ? fetch.bind(globalThis) : null,
+      getState = async () => ({}),
+      joinOutlookEmailUrl,
+      normalizeOutlookEmailAccounts,
+      normalizeOutlookEmailAddress,
+      normalizeOutlookEmailBaseUrl,
+      normalizeOutlookEmailMailApiMessages,
+      persistRegistrationEmailState = null,
+      pickVerificationMessageWithTimeFallback,
+      setEmailState = async () => {},
+      setPersistentSettings = async () => {},
+      sleepWithStop = async () => {},
+      throwIfStopped = () => {},
+    } = deps;
+
+    async function persistResolvedEmailState(state = null, email, options = {}) {
+      if (typeof persistRegistrationEmailState === 'function') {
+        await persistRegistrationEmailState(state, email, options);
+        return;
+      }
+      await setEmailState(email, options);
+    }
+
+    function normalizeOutlookEmailReceiveMailbox(value = '') {
+      const normalized = normalizeOutlookEmailAddress(value);
+      if (!normalized) return '';
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
+    }
+
+    function normalizeOutlookEmailUsedAddresses(value = []) {
+      const source = Array.isArray(value) ? value : [];
+      const addresses = [];
+      const seen = new Set();
+      for (const item of source) {
+        const email = normalizeOutlookEmailReceiveMailbox(item);
+        if (!email || seen.has(email)) continue;
+        seen.add(email);
+        addresses.push(email);
+      }
+      return addresses;
+    }
+
+    function getOutlookEmailConfig(state = {}) {
+      return {
+        baseUrl: normalizeOutlookEmailBaseUrl(state.outlookEmailBaseUrl || DEFAULT_OUTLOOK_EMAIL_BASE_URL),
+        apiKey: String(state.outlookEmailApiKey || DEFAULT_OUTLOOK_EMAIL_API_KEY || '').trim(),
+        receiveMailbox: normalizeOutlookEmailReceiveMailbox(state.outlookEmailReceiveMailbox),
+        usedAddresses: normalizeOutlookEmailUsedAddresses(state.outlookEmailUsedAddresses),
+      };
+    }
+
+    function ensureOutlookEmailConfig(state, options = {}) {
+      const { requireApiKey = true } = options;
+      const config = getOutlookEmailConfig(state);
+      if (!config.baseUrl) {
+        throw new Error('outlookEmail 服务地址为空或格式无效。');
+      }
+      if (requireApiKey && !config.apiKey) {
+        throw new Error('outlookEmail API Key 为空。');
+      }
+      return config;
+    }
+
+    async function requestOutlookEmailJson(config, path, options = {}) {
+      if (!fetchImpl) {
+        throw new Error('outlookEmail 当前运行环境不支持 fetch。');
+      }
+      const {
+        method = 'GET',
+        payload,
+        searchParams,
+        timeoutMs = 20000,
+      } = options;
+      const url = new URL(joinOutlookEmailUrl(config.baseUrl, path));
+      if (searchParams && typeof searchParams === 'object') {
+        for (const [key, value] of Object.entries(searchParams)) {
+          if (value === undefined || value === null || value === '') continue;
+          url.searchParams.set(key, String(value));
+        }
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+      let response;
+      try {
+        response = await fetchImpl(url.toString(), {
+          method,
+          headers: buildOutlookEmailHeaders(config, {
+            json: payload !== undefined,
+          }),
+          body: payload !== undefined ? JSON.stringify(payload) : undefined,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        const errorMessage = err?.name === 'AbortError'
+          ? `outlookEmail 请求超时（>${Math.round(timeoutMs / 1000)} 秒）`
+          : `outlookEmail 请求失败：${err.message}`;
+        throw new Error(errorMessage);
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const text = await response.text();
+      let parsed;
+      try {
+        parsed = text ? JSON.parse(text) : {};
+      } catch {
+        parsed = text;
+      }
+      if (!response.ok) {
+        const payloadError = typeof parsed === 'object' && parsed
+          ? (parsed.message || parsed.error || parsed.msg)
+          : '';
+        throw new Error(`outlookEmail 请求失败：${payloadError || text || `HTTP ${response.status}`}`);
+      }
+      if (parsed && typeof parsed === 'object' && parsed.success === false) {
+        throw new Error(`outlookEmail 业务错误：${parsed.message || parsed.error || parsed.msg || '请求失败'}`);
+      }
+      return parsed;
+    }
+
+    async function listOutlookEmailAccounts(state, options = {}) {
+      const latestState = state || await getState();
+      const config = ensureOutlookEmailConfig(latestState);
+      const limit = Math.max(1, Number(options.limit) || 10000);
+      const offset = Math.max(0, Number(options.offset) || 0);
+      const payload = await requestOutlookEmailJson(config, '/api/external/accounts', {
+        method: 'GET',
+        searchParams: {
+          limit,
+          offset,
+          sort_by: options.sortBy || 'created_at',
+          sort_order: options.sortOrder || 'desc',
+          group_id: options.groupId || '',
+        },
+      });
+      return {
+        config,
+        accounts: normalizeOutlookEmailAccounts(payload),
+      };
+    }
+
+    function pickOutlookEmailAccount(accounts = [], state = {}) {
+      const config = getOutlookEmailConfig(state);
+      const usedSet = new Set(config.usedAddresses);
+      const currentEmail = normalizeOutlookEmailReceiveMailbox(state.email);
+      if (currentEmail) {
+        const currentAccount = accounts.find((account) => account.email === currentEmail) || null;
+        if (currentAccount) return currentAccount;
+      }
+      return accounts.find((account) => account?.email && !usedSet.has(account.email)) || accounts[0] || null;
+    }
+
+    async function setOutlookEmailAddressUsed(email, options = {}) {
+      const address = normalizeOutlookEmailReceiveMailbox(email);
+      if (!address) return { updated: false };
+
+      const state = options.state || await getState();
+      const usedAddresses = normalizeOutlookEmailUsedAddresses([
+        ...(state.outlookEmailUsedAddresses || []),
+        address,
+      ]);
+      await setPersistentSettings({ outlookEmailUsedAddresses: usedAddresses });
+      await addLog(`${options.logPrefix || 'outlookEmail'}：已将 ${address} 标记为已用。`, options.level || 'ok');
+      return { updated: true, outlookEmailUsedAddresses: usedAddresses };
+    }
+
+    async function fetchOutlookEmailAddress(state, options = {}) {
+      throwIfStopped();
+      const latestState = state || await getState();
+      const { accounts } = await listOutlookEmailAccounts(latestState, {
+        limit: options.limit || 10000,
+        groupId: options.groupId || latestState.outlookEmailGroupId || '',
+      });
+      const account = pickOutlookEmailAccount(accounts, latestState);
+      if (!account?.email) {
+        throw new Error('outlookEmail 没有返回可用邮箱。');
+      }
+
+      await persistResolvedEmailState(latestState, account.email, {
+        source: 'generated:outlook-email',
+        preserveAccountIdentity: Boolean(options?.preserveAccountIdentity),
+      });
+      await addLog(`outlookEmail：已取用 ${account.email}`, 'ok');
+      return account.email;
+    }
+
+    function resolveOutlookEmailPollTargetEmail(state = {}, pollPayload = {}, config = getOutlookEmailConfig(state)) {
+      const configuredReceiveMailbox = normalizeOutlookEmailReceiveMailbox(config.receiveMailbox);
+      const mailProvider = String(state?.mailProvider || '').trim().toLowerCase();
+      const emailGenerator = String(state?.emailGenerator || '').trim().toLowerCase();
+      if (mailProvider === OUTLOOK_EMAIL_PROVIDER && emailGenerator !== OUTLOOK_EMAIL_GENERATOR && configuredReceiveMailbox) {
+        return configuredReceiveMailbox;
+      }
+
+      const requestedTarget = normalizeOutlookEmailReceiveMailbox(pollPayload.targetEmail);
+      if (requestedTarget) {
+        return requestedTarget;
+      }
+
+      return normalizeOutlookEmailReceiveMailbox(state.email);
+    }
+
+    async function listOutlookEmailMessages(state, options = {}) {
+      const latestState = state || await getState();
+      const config = ensureOutlookEmailConfig(latestState);
+      const address = normalizeOutlookEmailReceiveMailbox(options.address);
+      if (!address) {
+        throw new Error('outlookEmail 查信缺少目标邮箱地址。');
+      }
+      const top = Math.max(1, Math.min(50, Number(options.limit) || OUTLOOK_EMAIL_DEFAULT_PAGE_SIZE));
+      const folder = String(options.folder || 'inbox').trim().toLowerCase();
+      const payload = await requestOutlookEmailJson(config, '/api/external/emails', {
+        method: 'GET',
+        searchParams: {
+          email: address,
+          folder,
+          top,
+          skip: Math.max(0, Number(options.skip) || 0),
+          subject_contains: options.subjectContains || '',
+          from_contains: options.fromContains || '',
+          keyword: options.keyword || '',
+        },
+      });
+      const messages = normalizeOutlookEmailMailApiMessages(payload, folder)
+        .filter((message) => !message.address || message.address === address);
+      return { config, messages, payload };
+    }
+
+    function summarizeOutlookEmailMessagesForLog(messages) {
+      return (messages || [])
+        .slice()
+        .sort((left, right) => {
+          const leftTime = Date.parse(left.receivedDateTime || '') || 0;
+          const rightTime = Date.parse(right.receivedDateTime || '') || 0;
+          return rightTime - leftTime;
+        })
+        .slice(0, 3)
+        .map((message) => {
+          const receivedAt = message?.receivedDateTime || '未知时间';
+          const sender = message?.from?.emailAddress?.address || '未知发件人';
+          const subject = message?.subject || '（无主题）';
+          const preview = String(message?.bodyPreview || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+          return `[${message.folder || 'inbox'}] ${receivedAt} | ${sender} | ${subject} | ${preview}`;
+        })
+        .join(' || ');
+    }
+
+    async function pollOutlookEmailVerificationCode(step, state, pollPayload = {}) {
+      const latestState = state || await getState();
+      const config = ensureOutlookEmailConfig(latestState);
+      const targetEmail = resolveOutlookEmailPollTargetEmail(latestState, pollPayload, config);
+      if (!targetEmail) {
+        throw new Error('outlookEmail 轮询前缺少目标邮箱地址。');
+      }
+      await addLog(`步骤 ${step}：正在轮询 outlookEmail 邮件（${targetEmail}）...`, 'info');
+
+      const maxAttempts = Number(pollPayload.maxAttempts) || 5;
+      const intervalMs = Number(pollPayload.intervalMs) || 3000;
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        throwIfStopped();
+        try {
+          const results = [];
+          for (const folder of ['inbox', 'junkemail']) {
+            try {
+              const { messages } = await listOutlookEmailMessages(latestState, {
+                address: targetEmail,
+                folder,
+                limit: pollPayload.limit || OUTLOOK_EMAIL_DEFAULT_PAGE_SIZE,
+              });
+              results.push(...messages);
+            } catch (err) {
+              if (folder === 'inbox') throw err;
+              await addLog(`步骤 ${step}：outlookEmail 垃圾邮件轮询失败：${err.message}`, 'warn');
+            }
+          }
+
+          const matchResult = pickVerificationMessageWithTimeFallback(results, {
+            afterTimestamp: pollPayload.filterAfterTimestamp || 0,
+            senderFilters: pollPayload.senderFilters || [],
+            subjectFilters: pollPayload.subjectFilters || [],
+            requiredKeywords: pollPayload.requiredKeywords || [],
+            codePatterns: pollPayload.codePatterns || [],
+            excludeCodes: pollPayload.excludeCodes || [],
+          });
+          const match = matchResult.match;
+          if (match?.code) {
+            if (matchResult.usedRelaxedFilters) {
+              const fallbackLabel = matchResult.usedTimeFallback ? '宽松匹配 + 时间回退' : '宽松匹配';
+              await addLog(`步骤 ${step}：严格规则未命中，已改用 ${fallbackLabel} 并命中 outlookEmail 验证码。`, 'warn');
+            }
+            await addLog(`步骤 ${step}：已通过 outlookEmail 找到验证码：${match.code}`, 'ok');
+            return {
+              ok: true,
+              code: match.code,
+              emailTimestamp: match.receivedAt || Date.now(),
+              mailId: match.message?.id || '',
+            };
+          }
+
+          lastError = new Error(`步骤 ${step}：暂未在 outlookEmail 中找到匹配验证码（${attempt}/${maxAttempts}）。`);
+          await addLog(lastError.message, attempt === maxAttempts ? 'warn' : 'info');
+          const sample = summarizeOutlookEmailMessagesForLog(results);
+          if (sample) {
+            await addLog(`步骤 ${step}：最近邮件样本：${sample}`, 'info');
+          }
+        } catch (err) {
+          lastError = err;
+          await addLog(`步骤 ${step}：outlookEmail 轮询失败：${err.message}`, 'warn');
+        }
+        if (attempt < maxAttempts) {
+          await sleepWithStop(intervalMs);
+        }
+      }
+      throw lastError || new Error(`步骤 ${step}：未在 outlookEmail 中找到新的匹配验证码。`);
+    }
+
+    return {
+      ensureOutlookEmailConfig,
+      fetchOutlookEmailAddress,
+      getOutlookEmailConfig,
+      listOutlookEmailAccounts,
+      listOutlookEmailMessages,
+      normalizeOutlookEmailReceiveMailbox,
+      normalizeOutlookEmailUsedAddresses,
+      pollOutlookEmailVerificationCode,
+      requestOutlookEmailJson,
+      resolveOutlookEmailPollTargetEmail,
+      setOutlookEmailAddressUsed,
+    };
+  }
+
+  return {
+    createOutlookEmailProvider,
+  };
+});

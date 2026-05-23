@@ -12,6 +12,7 @@
       closeConflictingTabsForSource,
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       CLOUD_MAIL_PROVIDER = 'cloudmail',
+      OUTLOOK_EMAIL_PROVIDER = 'outlook-email',
       completeNodeFromBackground,
       confirmCustomVerificationStepBypassRequest,
       getNodeIdByStepForState,
@@ -28,6 +29,7 @@
       MAIL_2925_VERIFICATION_MAX_ATTEMPTS,
       pollCloudflareTempEmailVerificationCode,
       pollCloudMailVerificationCode,
+      pollOutlookEmailVerificationCode,
       pollHotmailVerificationCode,
       pollLuckmailVerificationCode,
       sendToContentScript,
@@ -984,6 +986,16 @@
           ...cleanPollOverrides,
         }, cleanPollOverrides, `轮询${getVerificationCodeLabel(step)}验证码邮箱`);
         return pollCloudMailVerificationCode(step, state, timedPoll.payload);
+      }
+      if (mail.provider === OUTLOOK_EMAIL_PROVIDER) {
+        if (typeof pollOutlookEmailVerificationCode !== 'function') {
+          throw new Error('outlookEmail 验证码轮询能力尚未接入。');
+        }
+        const timedPoll = await applyMailPollingTimeBudget(step, {
+          ...getVerificationPollPayload(step, state),
+          ...cleanPollOverrides,
+        }, cleanPollOverrides, `轮询${getVerificationCodeLabel(step)}验证码邮箱`);
+        return pollOutlookEmailVerificationCode(step, state, timedPoll.payload);
       }
 
       if (Number(pollOverrides.resendIntervalMs) > 0) {
