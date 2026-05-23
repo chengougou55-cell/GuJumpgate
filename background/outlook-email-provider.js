@@ -5,8 +5,11 @@
   const OUTLOOK_EMAIL_JUNK_LIST_TIMEOUT_MS = 8000;
   const OUTLOOK_EMAIL_DETAIL_TIMEOUT_MS = 8000;
   const OUTLOOK_EMAIL_DETAIL_LIMIT = 3;
-  const OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS = 8000;
+  const OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS = 4000;
   const OUTLOOK_EMAIL_CLEAN_CHECK_LIMIT = 10;
+  const OUTLOOK_EMAIL_CLEAN_CHECK_DETAIL_LIMIT = 3;
+  const OUTLOOK_EMAIL_CLEAN_CHECK_FAILURE_FALLBACK_THRESHOLD = 1;
+  const OUTLOOK_EMAIL_CLEAN_CHECK_FOLDERS = Object.freeze(['inbox', 'junkemail']);
   const OUTLOOK_EMAIL_OPENAI_PROBES = Object.freeze([
     { fromContains: 'openai' },
     { keyword: 'openai' },
@@ -89,6 +92,12 @@
       return config;
     }
 
+    function createOutlookEmailError(message, details = {}) {
+      const error = new Error(message);
+      Object.assign(error, details);
+      return error;
+    }
+
     async function requestOutlookEmailJson(config, path, options = {}) {
       if (!fetchImpl) {
         throw new Error('outlookEmail 当前运行环境不支持 fetch。');
@@ -134,7 +143,10 @@
         const errorMessage = aborted
           ? `outlookEmail 请求超时（>${Math.round(timeoutMs / 1000)} 秒）`
           : `outlookEmail 请求失败：${err.message}`;
-        throw new Error(errorMessage);
+        throw createOutlookEmailError(errorMessage, {
+          transient: aborted || /failed to fetch|network|timeout|timed out|econnreset|etimedout/i.test(String(err?.message || '')),
+          cause: err,
+        });
       } finally {
         clearTimeout(timeoutId);
         if (signal && externalAbortHandler) {
@@ -153,10 +165,28 @@
         const payloadError = typeof parsed === 'object' && parsed
           ? (parsed.message || parsed.error || parsed.msg)
           : '';
-        throw new Error(`outlookEmail 请求失败：${payloadError || text || `HTTP ${response.status}`}`);
+        const status = Number(response.status) || 0;
+        const detail = payloadError || text || `HTTP ${status}`;
+        const authError = status === 401 || status === 403;
+        const transient = status === 408 || status === 425 || status === 429 || status >= 500;
+        throw createOutlookEmailError(
+          authError
+            ? `outlookEmail API Key 或权限错误（HTTP ${status}）：${detail}`
+            : `outlookEmail 请求失败：${detail}`,
+          {
+            status,
+            transient,
+            hard: authError,
+            payload: parsed,
+          }
+        );
       }
       if (parsed && typeof parsed === 'object' && parsed.success === false) {
-        throw new Error(`outlookEmail 业务错误：${parsed.message || parsed.error || parsed.msg || '请求失败'}`);
+        const detail = parsed.message || parsed.error || parsed.msg || '请求失败';
+        throw createOutlookEmailError(`outlookEmail 业务错误：${detail}`, {
+          transient: /timeout|timed out|temporar|暂时|稍后|繁忙|重试|cannot access local variable 'detail'/i.test(String(detail || '')),
+          payload: parsed,
+        });
       }
       return parsed;
     }
@@ -235,8 +265,110 @@
       return /\bopenai\b|chatgpt|tm\.openai\.com|auth\.openai\.com|accounts\.openai\.com/.test(text);
     }
 
-    function isOutlookEmailAllFolderUnsupportedError(err) {
-      return /folder|mailbox|all|unsupported|invalid|未知|不支持|无效|文件夹|邮箱文件夹/i.test(String(err?.message || ''));
+    function isOutlookEmailStrongOpenAiMessage(message = {}) {
+      const sender = String(message?.from?.emailAddress?.address || '').trim().toLowerCase();
+      return /(^|[.@_-])(openai|chatgpt)([.@_-]|$)|tm\.openai\.com|auth\.openai\.com|accounts\.openai\.com/.test(sender);
+    }
+
+    function isOutlookEmailSparseMessage(message = {}) {
+      return !String(message?.from?.emailAddress?.address || '').trim()
+        && !String(message?.subject || '').trim()
+        && !String(message?.bodyPreview || '').trim()
+        && Boolean(String(message?.id || '').trim());
+    }
+
+    function isOutlookEmailAllFolderFallbackError(err) {
+      return /folder|mailbox|all|unsupported|invalid|未知|不支持|无效|文件夹|邮箱文件夹|cannot access local variable 'detail'|请求超时|timeout|timed out/i.test(String(err?.message || ''));
+    }
+
+    function isOutlookEmailTransientCleanCheckError(err) {
+      if (err?.transient === true) return true;
+      const status = Number(err?.status || 0) || 0;
+      if (status === 408 || status === 425 || status === 429 || status >= 500) return true;
+      return /请求超时|timeout|timed out|failed to fetch|network|abort|econnreset|etimedout|temporar|暂时|稍后|繁忙|重试|cannot access local variable 'detail'/i
+        .test(String(err?.message || ''));
+    }
+
+    function isOutlookEmailRecoverableCleanCheckError(err) {
+      return isOutlookEmailTransientCleanCheckError(err) || isOutlookEmailAllFolderFallbackError(err);
+    }
+
+    function isOutlookEmailHardCleanCheckError(err) {
+      if (err?.hard === true) return true;
+      const status = Number(err?.status || 0) || 0;
+      if (status === 401 || status === 403) return true;
+      return /api key|unauthorized|forbidden|权限|鉴权|认证|密钥/i.test(String(err?.message || ''));
+    }
+
+    function shouldUseOutlookEmailUnconfirmedFallback(err, options = {}) {
+      if (options.allowUnconfirmedCleanCheckFallback === false) return false;
+      if (isOutlookEmailHardCleanCheckError(err)) return false;
+      if (err?.recoverable === true) return true;
+      return isOutlookEmailRecoverableCleanCheckError(err);
+    }
+
+    function normalizeOutlookEmailCleanCheckFolders(value = []) {
+      const source = Array.isArray(value) && value.length ? value : OUTLOOK_EMAIL_CLEAN_CHECK_FOLDERS;
+      const folders = [];
+      const seen = new Set();
+      for (const item of source) {
+        const folder = String(item || '').trim().toLowerCase();
+        if (!folder || seen.has(folder)) continue;
+        seen.add(folder);
+        folders.push(folder);
+      }
+      return folders.length ? folders : OUTLOOK_EMAIL_CLEAN_CHECK_FOLDERS.slice();
+    }
+
+    function dedupeOutlookEmailMessages(messages = []) {
+      const deduped = [];
+      const seen = new Set();
+      for (const message of Array.isArray(messages) ? messages : []) {
+        if (!message) continue;
+        const key = String(message.id || '').trim()
+          || [
+            message.receivedDateTime || '',
+            message.from?.emailAddress?.address || '',
+            message.subject || '',
+            message.bodyPreview || '',
+          ].join('|');
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(message);
+      }
+      return deduped;
+    }
+
+    function getOutlookEmailCleanCheckProbes(options = {}) {
+      if (Array.isArray(options.openAiProbes)) {
+        return options.openAiProbes.length ? options.openAiProbes : [{}];
+      }
+      return options.useProbeSearchForCleanCheck === true
+        ? OUTLOOK_EMAIL_OPENAI_PROBES
+        : [{}];
+    }
+
+    function shouldConfirmOutlookEmailMessageDetail(message = {}, probe = {}) {
+      if (isOutlookEmailOpenAiMessage(message)) {
+        return true;
+      }
+      if (isOutlookEmailSparseMessage(message)) {
+        return true;
+      }
+      return Boolean(probe?.keyword || probe?.fromContains || probe?.subjectContains);
+    }
+
+    function buildOutlookEmailCleanCheckError(errors = []) {
+      const source = Array.isArray(errors) ? errors : [];
+      const message = source
+        .map((item) => `${item.folder || 'unknown'}：${item.error?.message || item.error || '未知错误'}`)
+        .join('；');
+      return createOutlookEmailError(message || 'outlookEmail 清理检查失败。', {
+        transient: source.length > 0 && source.every((item) => isOutlookEmailTransientCleanCheckError(item.error)),
+        recoverable: source.length > 0 && source.every((item) => isOutlookEmailRecoverableCleanCheckError(item.error)),
+        hard: source.some((item) => isOutlookEmailHardCleanCheckError(item.error)),
+        cleanCheckErrors: source,
+      });
     }
 
     function summarizeOutlookEmailOpenAiMessage(message = {}) {
@@ -248,11 +380,11 @@
 
     async function getConfirmedOutlookEmailOpenAiMessage(state, address, message, options = {}) {
       if (!message) return null;
-      if (isOutlookEmailOpenAiMessage(message)) {
+      if (isOutlookEmailStrongOpenAiMessage(message)) {
         return message;
       }
       if (!message.id) {
-        return null;
+        return isOutlookEmailOpenAiMessage(message) ? message : null;
       }
       try {
         const { message: detailMessage } = await getOutlookEmailMessageDetail(state, {
@@ -270,37 +402,63 @@
       }
     }
 
-    async function listOutlookEmailProbeMessages(state, targetEmail, probe, options = {}) {
-      try {
-        const result = await listOutlookEmailMessages(state, {
-          address: targetEmail,
-          folder: 'all',
-          limit: options.limit,
-          timeoutMs: options.cleanCheckTimeoutMs || OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS,
-          ...probe,
-        });
-        return result.messages || [];
-      } catch (err) {
-        if (!isOutlookEmailAllFolderUnsupportedError(err)) {
-          throw err;
+    async function collectOutlookEmailProbeMessages(state, targetEmail, probe, options = {}) {
+      const results = [];
+      const folders = normalizeOutlookEmailCleanCheckFolders(options.cleanCheckFolders);
+      const timeoutMs = options.cleanCheckTimeoutMs || OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS;
+      if (options.useAllFolderForCleanCheck === true) {
+        try {
+          const result = await listOutlookEmailMessages(state, {
+            address: targetEmail,
+            folder: 'all',
+            limit: options.limit,
+            timeoutMs,
+            ...probe,
+          });
+          return { messages: result.messages || [], errors: [] };
+        } catch (err) {
+          if (!isOutlookEmailAllFolderFallbackError(err)) {
+            throw err;
+          }
+          await addLog(`outlookEmail：folder=all 查询失败，回退检查${folders.join(' / ')}：${err.message}`, 'warn');
         }
-        await addLog(`outlookEmail：folder=all 查询失败，回退检查收件箱和垃圾邮件：${err.message}`, 'warn');
       }
 
-      const folders = ['inbox', 'junkemail'];
-      const results = [];
-      for (const folder of folders) {
+      const folderResults = await Promise.all(folders.map(async (folder) => {
         throwIfStopped();
-        const { messages } = await listOutlookEmailMessages(state, {
-          address: targetEmail,
-          folder,
-          limit: options.limit,
-          timeoutMs: options.cleanCheckTimeoutMs || OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS,
-          ...probe,
-        });
-        results.push(...(messages || []));
+        try {
+          const { messages } = await listOutlookEmailMessages(state, {
+            address: targetEmail,
+            folder,
+            limit: options.limit,
+            timeoutMs,
+            ...probe,
+          });
+          return { folder, messages: messages || [], error: null };
+        } catch (error) {
+          return { folder, messages: [], error };
+        }
+      }));
+
+      const errors = [];
+      for (const result of folderResults) {
+        results.push(...(result.messages || []));
+        if (result.error) {
+          errors.push({ folder: result.folder, error: result.error });
+        }
       }
-      return results;
+      return {
+        messages: dedupeOutlookEmailMessages(results),
+        errors,
+      };
+    }
+
+    async function listOutlookEmailProbeMessages(state, targetEmail, probe, options = {}) {
+      const result = await collectOutlookEmailProbeMessages(state, targetEmail, probe, options);
+      if (result.errors.length) {
+        throw buildOutlookEmailCleanCheckError(result.errors);
+      }
+      return result.messages;
     }
 
     async function checkOutlookEmailHasOpenAiMail(state, address, options = {}) {
@@ -309,17 +467,31 @@
         throw new Error('outlookEmail 检查 OpenAI 邮件时缺少目标邮箱地址。');
       }
 
-      const probes = Array.isArray(options.openAiProbes) && options.openAiProbes.length
-        ? options.openAiProbes
-        : OUTLOOK_EMAIL_OPENAI_PROBES;
+      const probes = getOutlookEmailCleanCheckProbes(options);
       const limit = Math.max(1, Math.min(50, Number(options.cleanCheckLimit) || OUTLOOK_EMAIL_CLEAN_CHECK_LIMIT));
+      const detailLimit = Math.max(0, Math.min(10, Number(options.cleanCheckDetailLimit) || OUTLOOK_EMAIL_CLEAN_CHECK_DETAIL_LIMIT));
       for (const probe of probes) {
         throwIfStopped();
-        const messages = await listOutlookEmailProbeMessages(state, targetEmail, probe, {
+        const { messages, errors } = await collectOutlookEmailProbeMessages(state, targetEmail, probe, {
           limit,
           timeoutMs: options.cleanCheckTimeoutMs || OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS,
+          cleanCheckFolders: options.cleanCheckFolders,
+          useAllFolderForCleanCheck: options.useAllFolderForCleanCheck,
         });
+        let detailChecks = 0;
+        let skippedDetailConfirmations = 0;
         for (const message of messages || []) {
+          if (!shouldConfirmOutlookEmailMessageDetail(message, probe)) {
+            continue;
+          }
+          const needsNetworkDetail = Boolean(message?.id) && !isOutlookEmailStrongOpenAiMessage(message);
+          if (needsNetworkDetail) {
+            if (detailChecks >= detailLimit) {
+              skippedDetailConfirmations += 1;
+              continue;
+            }
+            detailChecks += 1;
+          }
           const confirmedMessage = await getConfirmedOutlookEmailOpenAiMessage(state, targetEmail, message, {
             folder: message.folder || 'all',
             cleanCheckTimeoutMs: options.cleanCheckTimeoutMs,
@@ -332,6 +504,15 @@
             message: confirmedMessage,
             probe,
           };
+        }
+        if (skippedDetailConfirmations > 0) {
+          throw createOutlookEmailError(
+            `outlookEmail 清理检查有 ${skippedDetailConfirmations} 封可疑邮件未完成详情确认。`,
+            { transient: true }
+          );
+        }
+        if (errors.length) {
+          throw buildOutlookEmailCleanCheckError(errors);
         }
       }
       return { hasOpenAiMail: false, message: null, probe: null };
@@ -347,6 +528,12 @@
       let checkedCount = 0;
       let dirtyCount = 0;
       let failedCount = 0;
+      let fallbackAccount = null;
+      let fallbackError = null;
+      const fallbackFailureThreshold = Math.max(
+        1,
+        Number(options.cleanCheckFailureFallbackThreshold) || OUTLOOK_EMAIL_CLEAN_CHECK_FAILURE_FALLBACK_THRESHOLD
+      );
       for (const account of candidates) {
         throwIfStopped();
         checkedCount += 1;
@@ -369,8 +556,52 @@
           );
         } catch (err) {
           failedCount += 1;
-          await addLog(`outlookEmail：跳过 ${account.email}，检查 OpenAI 邮件失败：${err.message}`, 'warn');
+          if (!shouldUseOutlookEmailUnconfirmedFallback(err, options)) {
+            await addLog(`outlookEmail：跳过 ${account.email}，检查 OpenAI 邮件失败且不可作为备选：${err.message}`, 'warn');
+            if (isOutlookEmailHardCleanCheckError(err)) {
+              throw err;
+            }
+            continue;
+          }
+          if (!fallbackAccount) {
+            fallbackAccount = account;
+            fallbackError = err;
+          }
+          await addLog(`outlookEmail：${account.email} 的 OpenAI 邮件检查失败，已保留为备选：${err.message}`, 'warn');
+          if (failedCount >= fallbackFailureThreshold && fallbackAccount) {
+            await addLog(
+              `outlookEmail：连续 ${failedCount} 个邮箱检查失败，改用未确认备选 ${fallbackAccount.email} 继续流程，避免长时间阻塞。`,
+              'warn'
+            );
+            return {
+              ...fallbackAccount,
+              cleanCheck: {
+                checkedCount,
+                dirtyCount,
+                failedCount,
+                unconfirmed: true,
+                error: fallbackError?.message || '',
+              },
+            };
+          }
         }
+      }
+
+      if (fallbackAccount) {
+        await addLog(
+          `outlookEmail：未找到确认干净的邮箱，改用未确认备选 ${fallbackAccount.email} 继续流程。`,
+          'warn'
+        );
+        return {
+          ...fallbackAccount,
+          cleanCheck: {
+            checkedCount,
+            dirtyCount,
+            failedCount,
+            unconfirmed: true,
+            error: fallbackError?.message || '',
+          },
+        };
       }
 
       const reasonParts = [];
@@ -404,6 +635,12 @@
       const account = await pickOutlookEmailAccount(accounts, latestState, {
         cleanCheckLimit: options.cleanCheckLimit,
         cleanCheckTimeoutMs: options.cleanCheckTimeoutMs,
+        cleanCheckDetailLimit: options.cleanCheckDetailLimit,
+        cleanCheckFolders: options.cleanCheckFolders,
+        cleanCheckFailureFallbackThreshold: options.cleanCheckFailureFallbackThreshold,
+        allowUnconfirmedCleanCheckFallback: options.allowUnconfirmedCleanCheckFallback,
+        useAllFolderForCleanCheck: options.useAllFolderForCleanCheck,
+        useProbeSearchForCleanCheck: options.useProbeSearchForCleanCheck,
         openAiProbes: options.openAiProbes,
         requireCleanOpenAiMailbox: options.requireCleanOpenAiMailbox,
       });
@@ -421,7 +658,11 @@
         source: 'generated:outlook-email',
         preserveAccountIdentity: Boolean(options?.preserveAccountIdentity),
       });
-      await addLog(`outlookEmail：已随机取用无 OpenAI 邮件的邮箱 ${account.email}`, 'ok');
+      if (account.cleanCheck?.unconfirmed) {
+        await addLog(`outlookEmail：已取用邮箱 ${account.email}（OpenAI 邮件检查未完成：${account.cleanCheck.error || '远端检查失败'}）。`, 'warn');
+      } else {
+        await addLog(`outlookEmail：已随机取用无 OpenAI 邮件的邮箱 ${account.email}`, 'ok');
+      }
       return account.email;
     }
 

@@ -142,6 +142,7 @@
       normalizeMail2925Accounts,
       normalizePayPalAccounts,
       normalizeRunCount,
+      AUTO_RUN_MAX_RETRIES_PER_ROUND = 3,
       AUTO_RUN_TIMER_KIND_SCHEDULED_START,
       notifyNodeComplete,
       notifyNodeError,
@@ -338,6 +339,80 @@
         return false;
       }
       return normalizePlusPaymentMethod(state?.plusPaymentMethod) === 'paypal';
+    }
+
+    function getAutoRunRetryLimitForManualResume() {
+      return Math.max(1, Math.floor(Number(AUTO_RUN_MAX_RETRIES_PER_ROUND) || 3));
+    }
+
+    function buildAutoRunPaypalRetryResumeOptions(state = {}) {
+      const totalRuns = normalizeRunCount(state?.autoRunTotalRuns || 1);
+      const currentRun = Math.min(
+        totalRuns,
+        Math.max(1, Math.floor(Number(state?.autoRunCurrentRun) || 1))
+      );
+      const currentAttempt = Math.max(1, Math.floor(Number(state?.autoRunAttemptRun) || 1));
+      const retryLimit = getAutoRunRetryLimitForManualResume();
+      const maxAttempt = retryLimit + 1;
+      if (currentAttempt >= maxAttempt) {
+        return {
+          canResume: false,
+          totalRuns,
+          currentRun,
+          currentAttempt,
+          nextAttempt: currentAttempt,
+          reason: `当前轮已达到 ${retryLimit} 次 PayPal Checkout 异常重试上限。`,
+        };
+      }
+      return {
+        canResume: true,
+        totalRuns,
+        currentRun,
+        currentAttempt,
+        nextAttempt: currentAttempt + 1,
+      };
+    }
+
+    function hasAutoRunContextForPaypalRetryResume(state = {}) {
+      return Boolean(state?.plusManualConfirmationAutoRunContext);
+    }
+
+    async function resumeAutoRunAfterPaypalHostedGenericError(state = {}) {
+      if (typeof startAutoRunLoop !== 'function') {
+        return false;
+      }
+
+      if (typeof isAutoRunLockedState === 'function' && isAutoRunLockedState(state)) {
+        await addLog('PayPal Checkout 异常自动重试：检测到自动运行仍在继续，本次弹窗只清理等待状态。', 'info');
+        return true;
+      }
+
+      const resumeOptions = buildAutoRunPaypalRetryResumeOptions(state);
+      if (!resumeOptions.canResume) {
+        await addLog(`PayPal Checkout 异常自动重试未启动：${resumeOptions.reason}`, 'warn');
+        return false;
+      }
+
+      clearStopRequest?.();
+      await setState({
+        autoRunSkipFailures: Boolean(state?.autoRunSkipFailures),
+        autoRunRetryNonFreeTrial: Boolean(state?.autoRunRetryNonFreeTrial),
+        autoRunRetryPaypalCallback: true,
+      });
+      await addLog(
+        `PayPal Checkout 异常 15 秒未处理，自动恢复第 ${resumeOptions.currentRun}/${resumeOptions.totalRuns} 轮第 ${resumeOptions.nextAttempt} 次尝试。`,
+        'warn'
+      );
+      startAutoRunLoop(resumeOptions.totalRuns, {
+        autoRunSkipFailures: Boolean(state?.autoRunSkipFailures),
+        autoRunRetryNonFreeTrial: Boolean(state?.autoRunRetryNonFreeTrial),
+        autoRunRetryPaypalCallback: true,
+        mode: 'restart',
+        resumeCurrentRun: resumeOptions.currentRun,
+        resumeAttemptRun: resumeOptions.nextAttempt,
+        resumeRoundSummaries: state?.autoRunRoundSummaries,
+      });
+      return true;
     }
 
     async function executeNodeForManualChain(nodeId) {
@@ -1057,6 +1132,7 @@
           const currentRequestId = String(currentState?.plusManualConfirmationRequestId || '').trim();
           const method = String(currentState?.plusManualConfirmationMethod || '').trim().toLowerCase();
           const action = String(message.payload?.action || '').trim().toLowerCase();
+          const autoSelected = Boolean(message.payload?.autoSelected);
           const isGpcOtp = method === 'gopay-otp';
           const isPayPalHostedGenericError = method === 'paypal-hosted-generic-error';
           if (!currentState?.plusManualConfirmationPending) {
@@ -1073,6 +1149,11 @@
             plusManualConfirmationMethod: '',
             plusManualConfirmationTitle: '',
             plusManualConfirmationMessage: '',
+            plusManualConfirmationAutoRunContext: false,
+            plusManualConfirmationResolvedRequestId: requestId,
+            plusManualConfirmationResolvedAction: action,
+            plusManualConfirmationResolvedAutoSelected: autoSelected,
+            plusManualConfirmationResolvedAt: Date.now(),
           };
 
           if (isPayPalHostedGenericError) {
@@ -1091,6 +1172,13 @@
             }
 
             if (action === 'retry' && confirmed) {
+              if (autoSelected && hasAutoRunContextForPaypalRetryResume(currentState)) {
+                const resumed = await resumeAutoRunAfterPaypalHostedGenericError(currentState);
+                if (resumed) {
+                  return { ok: true, autoRunResumed: true };
+                }
+                return { ok: true, ignored: true, autoRetryLimitReached: true };
+              }
               clearStopRequest?.();
               const retryNodeId = 'plus-checkout-create';
               const retryStep = findStepByNodeId(retryNodeId, currentState) || 6;

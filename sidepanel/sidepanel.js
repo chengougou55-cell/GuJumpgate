@@ -574,6 +574,7 @@ const stepsList = document.querySelector('.steps-list');
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+const PAYPAL_HOSTED_GENERIC_ERROR_AUTO_RETRY_DELAY_MS = 15000;
 const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL = 'https://gujumpgate.zg.fyi/api/checkout';
 const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY = '2KwVxE6f0ABH002JLkoQJ9ReRf4_d01y';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH = 'oauth';
@@ -1406,6 +1407,9 @@ let cloudflareTempEmailDomainEditMode = false;
 let modalChoiceResolver = null;
 let currentModalActions = [];
 let modalResultBuilder = null;
+let modalAutoSelectTimer = null;
+let modalAutoSelectInterval = null;
+let modalAutoSelectRevision = 0;
 let activePlusManualConfirmationRequestId = '';
 let plusManualConfirmationDialogInFlight = false;
 let scheduledCountdownTimer = null;
@@ -1905,10 +1909,23 @@ function configureActionModalAlert(alert) {
   autoStartAlert.className = `modal-alert${alert.tone === 'danger' ? ' is-danger' : ''}`;
 }
 
-function resolveModalChoice(choice) {
+function clearActionModalAutoSelectTimer() {
+  if (modalAutoSelectTimer) {
+    clearTimeout(modalAutoSelectTimer);
+    modalAutoSelectTimer = null;
+  }
+  if (modalAutoSelectInterval) {
+    clearInterval(modalAutoSelectInterval);
+    modalAutoSelectInterval = null;
+  }
+}
+
+function resolveModalChoice(choice, extraMeta = {}) {
+  clearActionModalAutoSelectTimer();
+  modalAutoSelectRevision += 1;
   const optionChecked = Boolean(modalOptionInput?.checked);
   const result = typeof modalResultBuilder === 'function'
-    ? modalResultBuilder(choice, { optionChecked })
+    ? modalResultBuilder(choice, { optionChecked, ...(extraMeta || {}) })
     : choice;
   if (modalChoiceResolver) {
     modalChoiceResolver(result);
@@ -1923,7 +1940,41 @@ function resolveModalChoice(choice) {
   }
 }
 
-function openActionModal({ title, message, messageHtml, actions, option, alert, buildResult }) {
+function configureActionModalAutoSelect(autoSelect) {
+  clearActionModalAutoSelectTimer();
+  if (!autoSelect) {
+    return;
+  }
+  const actionId = String(autoSelect.actionId || '').trim();
+  const delayMs = Math.max(0, Number(autoSelect.delayMs) || 0);
+  if (!actionId || delayMs <= 0) {
+    return;
+  }
+  const revision = modalAutoSelectRevision;
+  const startedAt = Date.now();
+  const action = currentModalActions.find((item) => String(item?.id || '').trim() === actionId);
+  const button = [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartContinue]
+    .find((item) => item && item.textContent === action?.label);
+  const label = String(action?.label || '').trim();
+  const renderCountdown = () => {
+    if (!button || !label || revision !== modalAutoSelectRevision || !modalChoiceResolver) {
+      return;
+    }
+    const remainingMs = Math.max(0, delayMs - (Date.now() - startedAt));
+    const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+    button.textContent = `${label} (${remainingSeconds})`;
+  };
+  renderCountdown();
+  modalAutoSelectInterval = setInterval(renderCountdown, 1000);
+  modalAutoSelectTimer = setTimeout(() => {
+    if (revision !== modalAutoSelectRevision || !modalChoiceResolver) {
+      return;
+    }
+    resolveModalChoice(actionId, { autoSelected: true });
+  }, delayMs);
+}
+
+function openActionModal({ title, message, messageHtml, actions, option, alert, buildResult, autoSelect }) {
   if (!autoStartModal) {
     return Promise.resolve(null);
   }
@@ -1946,6 +1997,8 @@ function openActionModal({ title, message, messageHtml, actions, option, alert, 
   configureActionModalAlert(alert);
   configureActionModalOption(option);
   autoStartModal.hidden = false;
+  modalAutoSelectRevision += 1;
+  configureActionModalAutoSelect(autoSelect);
 
   return new Promise((resolve) => {
     modalChoiceResolver = resolve;
@@ -2021,6 +2074,7 @@ async function openConfirmModalWithOption({
 async function openPlusManualConfirmationDialog(options = {}) {
   const method = String(options.method || '').trim().toLowerCase();
   if (method === 'paypal-hosted-generic-error') {
+    const retryDelaySeconds = Math.round(PAYPAL_HOSTED_GENERIC_ERROR_AUTO_RETRY_DELAY_MS / 1000);
     return openActionModal({
       title: String(options.title || '').trim() || 'PayPal Checkout 异常',
       message: String(options.message || '').trim()
@@ -2030,7 +2084,15 @@ async function openPlusManualConfirmationDialog(options = {}) {
         { id: 'check', label: '检查', variant: 'btn-outline' },
         { id: 'retry', label: '重试', variant: 'btn-primary' },
       ],
-      alert: { text: '检查会打开 ChatGPT；重试会从创建 Plus Checkout 重新开始。', tone: 'info' },
+      alert: { text: `检查会打开 ChatGPT；重试会从创建 Plus Checkout 重新开始。${retryDelaySeconds} 秒内未处理将自动重试。`, tone: 'info' },
+      autoSelect: {
+        actionId: 'retry',
+        delayMs: PAYPAL_HOSTED_GENERIC_ERROR_AUTO_RETRY_DELAY_MS,
+      },
+      buildResult: (choice, meta) => ({
+        action: choice,
+        autoSelected: Boolean(meta?.autoSelected),
+      }),
     });
   }
   const title = String(options.title || '').trim() || (method === 'gopay' ? 'GoPay 订阅确认' : '手动确认');
@@ -2083,7 +2145,11 @@ async function syncPlusManualConfirmationDialog() {
       return;
     }
 
-    const confirmed = choice === 'confirm' || choice === 'retry' || choice === 'check';
+    const choiceAction = String(choice?.action || choice || '').trim();
+    const confirmed = choice === 'confirm'
+      || choice?.action === 'confirm'
+      || choiceAction === 'check'
+      || choiceAction === 'retry';
     const response = await chrome.runtime.sendMessage({
       type: 'RESOLVE_PLUS_MANUAL_CONFIRMATION',
       source: 'sidepanel',
@@ -2091,7 +2157,8 @@ async function syncPlusManualConfirmationDialog() {
         step,
         requestId,
         confirmed,
-        action: choice,
+        action: choiceAction,
+        autoSelected: Boolean(choice?.autoSelected),
       },
     });
     if (response?.error) {
@@ -9364,6 +9431,7 @@ async function openPlusManualConfirmationDialog(options = {}) {
   const method = String(options.method || '').trim().toLowerCase();
   const gopayValue = typeof PLUS_PAYMENT_METHOD_GOPAY !== 'undefined' ? PLUS_PAYMENT_METHOD_GOPAY : 'gopay';
   if (method === 'paypal-hosted-generic-error') {
+    const retryDelaySeconds = Math.round(PAYPAL_HOSTED_GENERIC_ERROR_AUTO_RETRY_DELAY_MS / 1000);
     return openActionModal({
       title: String(options.title || '').trim() || 'PayPal Checkout 异常',
       message: String(options.message || '').trim()
@@ -9373,7 +9441,15 @@ async function openPlusManualConfirmationDialog(options = {}) {
         { id: 'check', label: '检查', variant: 'btn-outline' },
         { id: 'retry', label: '重试', variant: 'btn-primary' },
       ],
-      alert: { text: '检查会打开 ChatGPT；重试会从创建 Plus Checkout 重新开始。', tone: 'info' },
+      alert: { text: `检查会打开 ChatGPT；重试会从创建 Plus Checkout 重新开始。${retryDelaySeconds} 秒内未处理将自动重试。`, tone: 'info' },
+      autoSelect: {
+        actionId: 'retry',
+        delayMs: PAYPAL_HOSTED_GENERIC_ERROR_AUTO_RETRY_DELAY_MS,
+      },
+      buildResult: (choice, meta) => ({
+        action: choice,
+        autoSelected: Boolean(meta?.autoSelected),
+      }),
     });
   }
   if (method === 'gopay-otp') {
@@ -9470,6 +9546,7 @@ async function syncPlusManualConfirmationDialog() {
         requestId,
         confirmed,
         action: choiceAction,
+        autoSelected: Boolean(choice?.autoSelected),
         ...(choice?.otp ? { otp: choice.otp } : {}),
       },
     });

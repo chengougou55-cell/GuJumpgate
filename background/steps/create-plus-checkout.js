@@ -1476,6 +1476,8 @@ function FindProxyForURL(url, host) {
       const latestState = typeof getState === 'function'
         ? await getState().catch(() => ({}))
         : {};
+      const hasAutoRunContext = Boolean(latestState?.autoRunning)
+        && /^(?:running|waiting_step|retrying|waiting_interval)$/.test(String(latestState?.autoRunPhase || '').trim());
       if (latestState?.autoRunRetryPaypalCallback) {
         await addLog('步骤 6：PayPal hosted checkout 返回 genericError，PAYPAL回调自动重试已开启，将换新邮箱重走流程。', 'warn');
         throw new Error(`${HOSTED_CHECKOUT_GENERIC_ERROR_PREFIX}${pageMessage}`);
@@ -1487,6 +1489,11 @@ function FindProxyForURL(url, host) {
         plusManualConfirmationMethod: 'paypal-hosted-generic-error',
         plusManualConfirmationTitle: 'PayPal Checkout 异常',
         plusManualConfirmationMessage: `${pageMessage} 请检查 PLUS 是否正常开通，或重新创建 Plus Checkout。`,
+        plusManualConfirmationAutoRunContext: hasAutoRunContext,
+        plusManualConfirmationResolvedRequestId: '',
+        plusManualConfirmationResolvedAction: '',
+        plusManualConfirmationResolvedAutoSelected: false,
+        plusManualConfirmationResolvedAt: 0,
       };
       await setState(patch);
       if (typeof broadcastDataUpdate === 'function') {

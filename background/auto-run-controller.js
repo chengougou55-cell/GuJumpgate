@@ -241,6 +241,29 @@
       return true;
     }
 
+    async function waitForManualPaypalHostedGenericErrorAutoRetry(requestId = '', delayMs = 15000) {
+      const normalizedRequestId = String(requestId || '').trim();
+      if (!normalizedRequestId) {
+        return false;
+      }
+
+      const timeoutAt = Date.now() + Math.max(0, Number(delayMs) || 0);
+      while (Date.now() < timeoutAt) {
+        await sleepWithStop(Math.min(500, Math.max(0, timeoutAt - Date.now())));
+        const state = await getState();
+        const currentRequestId = String(state?.plusManualConfirmationRequestId || '').trim();
+        if (!state?.plusManualConfirmationPending || currentRequestId !== normalizedRequestId) {
+          return Boolean(state?.plusManualConfirmationResolvedAutoSelected)
+            && String(state?.plusManualConfirmationResolvedRequestId || '').trim() === normalizedRequestId
+            && String(state?.plusManualConfirmationResolvedAction || '').trim().toLowerCase() === 'retry';
+        }
+      }
+
+      const state = await getState();
+      const currentRequestId = String(state?.plusManualConfirmationRequestId || '').trim();
+      return Boolean(state?.plusManualConfirmationPending) && currentRequestId === normalizedRequestId;
+    }
+
     function shouldKeepCustomMailProviderPoolEmail(state = {}) {
       return String(state?.mailProvider || '').trim().toLowerCase() === 'custom'
         && Array.isArray(state?.customMailProviderPool)
@@ -697,6 +720,9 @@
             const blockedByHostedCheckoutGenericError = typeof isHostedCheckoutGenericErrorFailure === 'function'
               ? isHostedCheckoutGenericErrorFailure(err)
               : /HOSTED_CHECKOUT_GENERIC_ERROR::/i.test(err?.message || String(err || ''));
+            const hostedCheckoutGenericErrorRequestId = blockedByHostedCheckoutGenericError
+              ? String((await getState())?.plusManualConfirmationRequestId || '').trim()
+              : '';
             const blockedByHostedCheckoutVerificationResendLimit = typeof isHostedCheckoutVerificationResendLimitFailure === 'function'
               ? isHostedCheckoutVerificationResendLimitFailure(err)
               : /HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT::/i.test(err?.message || String(err || ''));
@@ -715,6 +741,10 @@
             const retryableHostedCheckoutGenericError = blockedByHostedCheckoutGenericError
               && autoRunRetryPaypalCallback
               && attemptRun < maxPlusNonFreeTrialAttempts;
+            const waitForHostedCheckoutGenericErrorAutoRetry = blockedByHostedCheckoutGenericError
+              && !autoRunRetryPaypalCallback
+              && attemptRun < maxPlusNonFreeTrialAttempts
+              && hostedCheckoutGenericErrorRequestId;
             const canRetry = !blockedByAddPhone
               && !blockedByPhoneNoSupply
               && !blockedByPlusNonFreeTrial
@@ -853,6 +883,81 @@
                 }
                 throw sleepError;
               }
+              attemptRun += 1;
+              reuseExistingProgress = false;
+              continue;
+            }
+
+            if (waitForHostedCheckoutGenericErrorAutoRetry) {
+              await addLog(
+                `第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试遇到 PayPal Checkout 异常：${reason}；等待 15 秒，若无人处理将自动换新邮箱重试。`,
+                'warn'
+              );
+              cancelPendingCommands('当前尝试因 PayPal Checkout 异常已放弃。');
+              await broadcastStopToContentScripts();
+              await broadcastAutoRunStatus('retrying', {
+                currentRun: targetRun,
+                totalRuns,
+                attemptRun,
+                sessionId,
+              });
+              let shouldAutoRetry = false;
+              try {
+                shouldAutoRetry = await waitForManualPaypalHostedGenericErrorAutoRetry(
+                  hostedCheckoutGenericErrorRequestId,
+                  15000
+                );
+              } catch (sleepError) {
+                if (isStopError(sleepError)) {
+                  stoppedEarly = true;
+                  await appendRoundRecordIfNeeded('stopped', getErrorMessage(sleepError), sleepError);
+                  await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+                  await broadcastAutoRunStatus('stopped', {
+                    currentRun: targetRun,
+                    totalRuns,
+                    attemptRun,
+                    sessionId: 0,
+                  });
+                  break;
+                }
+                throw sleepError;
+              }
+              const latestAfterWait = await getState();
+              const resolvedRequestId = String(latestAfterWait?.plusManualConfirmationResolvedRequestId || '').trim();
+              const resolvedAction = String(latestAfterWait?.plusManualConfirmationResolvedAction || '').trim().toLowerCase();
+              const userResolvedManually = resolvedRequestId === hostedCheckoutGenericErrorRequestId
+                && resolvedAction
+                && !(resolvedAction === 'retry' && latestAfterWait?.plusManualConfirmationResolvedAutoSelected);
+              if (!shouldAutoRetry || userResolvedManually) {
+                stoppedEarly = true;
+                await addLog('PayPal Checkout 异常已由人工处理或取消，自动运行在当前轮停止等待。', 'warn');
+                await broadcastAutoRunStatus('stopped', {
+                  currentRun: targetRun,
+                  totalRuns,
+                  attemptRun,
+                  sessionId: 0,
+                });
+                break;
+              }
+              await setState({
+                plusManualConfirmationPending: false,
+                plusManualConfirmationRequestId: '',
+                plusManualConfirmationStep: 0,
+                plusManualConfirmationMethod: '',
+                plusManualConfirmationTitle: '',
+                plusManualConfirmationMessage: '',
+                plusManualConfirmationAutoRunContext: false,
+                plusManualConfirmationResolvedRequestId: hostedCheckoutGenericErrorRequestId,
+                plusManualConfirmationResolvedAction: 'retry',
+                plusManualConfirmationResolvedAutoSelected: true,
+                plusManualConfirmationResolvedAt: Date.now(),
+                autoRunRetryPaypalCallback: true,
+              });
+              forceFreshTabsNextRun = true;
+              await addLog(
+                `PayPal Checkout 异常 15 秒未处理，自动换新邮箱，开始第 ${targetRun}/${totalRuns} 轮第 ${attemptRun + 1} 次尝试。`,
+                'warn'
+              );
               attemptRun += 1;
               reuseExistingProgress = false;
               continue;

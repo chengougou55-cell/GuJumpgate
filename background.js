@@ -14076,6 +14076,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   normalizeMail2925Accounts,
   normalizePayPalAccounts,
   normalizeRunCount,
+  AUTO_RUN_MAX_RETRIES_PER_ROUND,
   AUTO_RUN_TIMER_KIND_SCHEDULED_START,
   notifyNodeComplete,
   notifyNodeError,

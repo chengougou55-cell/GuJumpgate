@@ -76,3 +76,36 @@ test('sidepanel exposes one-click log copy and txt export controls', () => {
   assert.match(script, /function buildCurrentLogText\(\)/);
   assert.ok(script.includes("downloadTextFile(`${logText}\\n`, buildLogExportFileName(), 'text/plain;charset=utf-8');"));
 });
+
+test('PayPal hosted checkout dialog auto retries after 15 seconds', () => {
+  const script = readProjectFile('sidepanel/sidepanel.js');
+  const routerScript = readProjectFile('background/message-router.js');
+  const autoRunScript = readProjectFile('background/auto-run-controller.js');
+  const checkoutScript = readProjectFile('background/steps/create-plus-checkout.js');
+  const backgroundScript = readProjectFile('background.js');
+
+  assert.match(script, /const PAYPAL_HOSTED_GENERIC_ERROR_AUTO_RETRY_DELAY_MS = 15000;/);
+  assert.match(script, /autoSelect:\s*\{\s*actionId:\s*'retry',\s*delayMs:\s*PAYPAL_HOSTED_GENERIC_ERROR_AUTO_RETRY_DELAY_MS,\s*\}/);
+  assert.match(script, /\$\{retryDelaySeconds\} 秒内未处理将自动重试/);
+  assert.match(script, /function clearActionModalAutoSelectTimer\(\)/);
+  assert.match(script, /button\.textContent = `\$\{label\} \(\$\{remainingSeconds\}\)`;/);
+  assert.match(script, /resolveModalChoice\(actionId,\s*\{\s*autoSelected:\s*true\s*\}\);/);
+  assert.match(script, /buildResult:\s*\(choice,\s*meta\)\s*=>\s*\(\{\s*action:\s*choice,\s*autoSelected:\s*Boolean\(meta\?\.autoSelected\),\s*\}\),/);
+  assert.match(script, /autoSelected:\s*Boolean\(choice\?\.autoSelected\),/);
+  assert.match(routerScript, /AUTO_RUN_MAX_RETRIES_PER_ROUND = 3,/);
+  assert.match(routerScript, /function resumeAutoRunAfterPaypalHostedGenericError\(state = \{\}\)/);
+  assert.match(routerScript, /return Boolean\(state\?\.plusManualConfirmationAutoRunContext\);/);
+  assert.match(routerScript, /autoSelected && hasAutoRunContextForPaypalRetryResume\(currentState\)/);
+  assert.match(routerScript, /autoRetryLimitReached:\s*true/);
+  assert.match(routerScript, /autoRunRetryPaypalCallback:\s*true/);
+  assert.match(routerScript, /resumeAttemptRun:\s*resumeOptions\.nextAttempt/);
+  assert.match(autoRunScript, /function waitForManualPaypalHostedGenericErrorAutoRetry\(requestId = '', delayMs = 15000\)/);
+  assert.match(autoRunScript, /waitForHostedCheckoutGenericErrorAutoRetry = blockedByHostedCheckoutGenericError/);
+  assert.match(autoRunScript, /waitForManualPaypalHostedGenericErrorAutoRetry\(\s*hostedCheckoutGenericErrorRequestId,\s*15000\s*\)/);
+  assert.match(autoRunScript, /autoRunRetryPaypalCallback:\s*true/);
+  assert.match(autoRunScript, /plusManualConfirmationAutoRunContext:\s*false/);
+  assert.match(autoRunScript, /attemptRun \+= 1;/);
+  assert.match(checkoutScript, /plusManualConfirmationAutoRunContext:\s*hasAutoRunContext/);
+  assert.match(checkoutScript, /plusManualConfirmationResolvedAutoSelected:\s*false/);
+  assert.match(backgroundScript, /AUTO_RUN_MAX_RETRIES_PER_ROUND,\n\s+AUTO_RUN_TIMER_KIND_SCHEDULED_START,/);
+});
