@@ -75,6 +75,7 @@ const DEFAULT_ACTIVE_FLOW_ID = 'openai';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH = 'oauth';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION = 'sub2api_codex_session';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_CPA_CODEX_SESSION = 'cpa_codex_session';
+const DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY = PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION;
 const NORMAL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
   activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
   plusModeEnabled: false,
@@ -491,7 +492,7 @@ const STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS = 8;
 const OAUTH_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
 const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
 const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
-const DEFAULT_SUB2API_URL = '';
+const DEFAULT_SUB2API_URL = 'http://156.239.40.207:18080/admin/accounts';
 const DEFAULT_CODEX2API_URL = 'http://localhost:8080/admin/accounts';
 const DEFAULT_GPC_HELPER_API_URL = 'https://your-gpc-helper-domain.example';
 const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL = 'https://gujumpgate.zg.fyi/api/checkout';
@@ -1006,7 +1007,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   customPassword: DEFAULT_ACCOUNT_PASSWORD,
   plusModeEnabled: true,
   plusPaymentMethod: DEFAULT_PLUS_PAYMENT_METHOD,
-  plusAccountAccessStrategy: PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH,
+  plusAccountAccessStrategy: DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY,
   plusHostedCheckoutOauthDelaySeconds: 10,
   plusCheckoutCloudConversionEnabled: true,
   plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
@@ -1089,10 +1090,10 @@ const PERSISTED_SETTING_DEFAULTS = {
   phoneCodeTimeoutWindows: DEFAULT_PHONE_CODE_TIMEOUT_WINDOWS,
   phoneCodePollIntervalSeconds: DEFAULT_PHONE_CODE_POLL_INTERVAL_SECONDS,
   phoneCodePollMaxRounds: DEFAULT_PHONE_CODE_POLL_ROUNDS,
-  mailProvider: HOTMAIL_PROVIDER,
+  mailProvider: OUTLOOK_EMAIL_PROVIDER,
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   mail2925UseAccountPool: false,
-  emailGenerator: 'duck',
+  emailGenerator: OUTLOOK_EMAIL_GENERATOR,
   customMailProviderPool: [],
   customEmailPool: [],
   customEmailPoolEntries: [],
@@ -2892,6 +2893,7 @@ const cloudMailProvider = self.MultiPageBackgroundCloudMailProvider.createCloudM
   pickVerificationMessageWithTimeFallback,
   setEmailState,
   setPersistentSettings,
+  broadcastDataUpdate,
   sleepWithStop,
   throwIfStopped,
 });
@@ -2922,6 +2924,7 @@ const outlookEmailProvider = self.MultiPageBackgroundOutlookEmailProvider.create
   pickVerificationMessageWithTimeFallback,
   setEmailState,
   setPersistentSettings,
+  broadcastDataUpdate,
   sleepWithStop,
   throwIfStopped,
 });
@@ -2975,7 +2978,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'localCpaStep9Mode':
       return normalizeLocalCpaStep9Mode(value);
     case 'sub2apiUrl':
-      return String(value || '').trim();
+      return normalizeSub2ApiUrl(value);
     case 'sub2apiEmail':
       return String(value || '').trim();
     case 'sub2apiPassword':
@@ -12762,138 +12765,7 @@ function shouldStopEmailAutoFetchRetries(generator, error) {
   if (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(message)) {
     return true;
   }
-  return generator === OUTLOOK_EMAIL_GENERATOR && /(服务地址|API Key|没有返回可用邮箱)/i.test(message);
-}
-
-async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
-  const currentState = await getState();
-  if (isHotmailProvider(currentState)) {
-    const account = await ensureHotmailAccountForFlow({
-      allowAllocate: true,
-      markUsed: true,
-      preferredAccountId: null,
-    });
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 Hotmail 账号 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
-    return account.registrationAliasEmail || (await getState()).email || account.email;
-  }
-
-  if (isLuckmailProvider(currentState)) {
-    const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：LuckMail 邮箱已就绪：${purchase.email_address}（第 ${attemptRuns} 次尝试）===`, 'ok');
-    return purchase.email_address;
-  }
-
-  if (isGeneratedAliasProvider(currentState)) {
-    if (currentState.mailProvider === GMAIL_PROVIDER) {
-      if (!currentState.emailPrefix) {
-        throw new Error('Gmail 原邮箱未设置，请先在侧边栏填写。');
-      }
-      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：Gmail +tag 模式已启用，将在步骤 3 自动生成邮箱（第 ${attemptRuns} 次尝试）===`, 'info');
-      return null;
-    }
-    if (!currentState.emailPrefix) {
-      throw new Error('2925 邮箱前缀未设置，请先在侧边栏填写。');
-    }
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：2925 模式已启用，将在步骤 3 自动生成邮箱（第 ${attemptRuns} 次尝试）===`, 'info');
-    return null;
-  }
-
-  if (currentState.email) {
-    return currentState.email;
-  }
-
-  if (isCustomMailProvider(currentState)) {
-    const poolSize = getCustomMailProviderPool(currentState).length;
-    if (poolSize > 0) {
-      const queuedEmail = getCustomMailProviderPoolEmailForRun(currentState, targetRun);
-      if (!queuedEmail) {
-        throw new Error(`自定义邮箱号池第 ${targetRun} 个邮箱不存在，请检查号池数量是否与自动轮数一致。`);
-      }
-      await setEmailState(queuedEmail);
-      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：自定义邮箱号池已就绪：${queuedEmail}（第 ${attemptRuns} 次尝试；第 4/8 步仍需手动输入验证码）===`, 'ok');
-      return queuedEmail;
-    }
-  }
-
-  if (isCustomEmailPoolGenerator(currentState)) {
-    const queuedEmail = getCustomEmailPoolEmailForRun(currentState, targetRun);
-    if (!queuedEmail) {
-      const poolSize = getCustomEmailPool(currentState).length;
-      throw new Error(
-        poolSize > 0
-          ? `自定义邮箱池第 ${targetRun} 个邮箱不存在，请检查邮箱池数量是否与自动轮数一致。`
-          : '自定义邮箱池为空，请先至少填写 1 个邮箱。'
-      );
-    }
-    await setEmailState(queuedEmail);
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：自定义邮箱池已就绪：${queuedEmail}（第 ${attemptRuns} 次尝试）===`, 'ok');
-    return queuedEmail;
-  }
-
-  if (shouldUseCustomRegistrationEmail(currentState)) {
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先填写自定义注册邮箱，然后继续 ===`, 'warn');
-    await broadcastAutoRunStatus('waiting_email', {
-      currentRun: targetRun,
-      totalRuns,
-      attemptRun: attemptRuns,
-    });
-
-    await waitForResume();
-
-    const resumedState = await getState();
-    if (!resumedState.email) {
-      throw new Error('无法继续：当前没有注册邮箱。');
-    }
-    return resumedState.email;
-  }
-
-  const generator = normalizeEmailGenerator(currentState.emailGenerator);
-  const generatorLabel = getEmailGeneratorLabel(generator);
-  let lastError = null;
-  let attemptedFetches = 0;
-  for (let attempt = 1; attempt <= EMAIL_FETCH_MAX_ATTEMPTS; attempt++) {
-    attemptedFetches = attempt;
-    try {
-      if (attempt > 1) {
-        await addLog(`${generatorLabel}：正在进行第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
-      }
-      const generatedEmail = await fetchGeneratedEmail(currentState, {
-        generateNew: generator !== 'icloud' || normalizeIcloudFetchMode(currentState.icloudFetchMode) === 'always_new',
-        generator,
-      });
-      await addLog(
-        `=== 目标 ${targetRun}/${totalRuns} 轮：${generatorLabel}已就绪：${generatedEmail}（第 ${attemptRuns} 次尝试，第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次获取）===`,
-        'ok'
-      );
-      return generatedEmail;
-    } catch (err) {
-      lastError = err;
-      await addLog(`${generatorLabel}自动获取失败（${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS}）：${err.message}`, 'warn');
-      if (generator === 'icloud' && shouldStopIcloudAutoFetchRetries(err)) {
-        await addLog('iCloud：检测到会话/网络异常，本轮将停止重复重试。请先确认 iCloud 页面已登录，再点击“我已登录”或手动粘贴邮箱继续。', 'warn');
-      }
-      if (shouldStopEmailAutoFetchRetries(generator, err)) {
-        break;
-      }
-    }
-  }
-
-  const totalAttempts = Math.max(1, attemptedFetches);
-  await addLog(`${generatorLabel}自动获取已连续失败 ${totalAttempts} 次：${lastError?.message || '未知错误'}`, 'error');
-  await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先自动获取邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
-  await broadcastAutoRunStatus('waiting_email', {
-    currentRun: targetRun,
-    totalRuns,
-    attemptRun: attemptRuns,
-  });
-
-  await waitForResume();
-
-  const resumedState = await getState();
-  if (!resumedState.email) {
-    throw new Error('无法继续：当前没有邮箱地址。');
-  }
-  return resumedState.email;
+  return generator === OUTLOOK_EMAIL_GENERATOR && /(服务地址|API Key|没有返回可用邮箱|没有找到无 OpenAI 邮件的可用邮箱)/i.test(message);
 }
 
 async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
@@ -12950,7 +12822,14 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return null;
   }
 
-  if (currentState.email) {
+  const generator = normalizeEmailGenerator(currentState.emailGenerator);
+  const generatorLabel = getEmailGeneratorLabel(generator);
+  const shouldFetchCleanOutlookEmail = (
+    String(currentState.mailProvider || '').trim().toLowerCase() === OUTLOOK_EMAIL_PROVIDER
+    && generator === OUTLOOK_EMAIL_GENERATOR
+  );
+
+  if (currentState.email && !shouldFetchCleanOutlookEmail) {
     return currentState.email;
   }
 
@@ -12999,8 +12878,6 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return resumedState.email;
   }
 
-  const generator = normalizeEmailGenerator(currentState.emailGenerator);
-  const generatorLabel = getEmailGeneratorLabel(generator);
   let lastError = null;
   let attemptedFetches = 0;
   for (let attempt = 1; attempt <= EMAIL_FETCH_MAX_ATTEMPTS; attempt++) {
@@ -13010,11 +12887,12 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
         await addLog(`${generatorLabel}：正在进行第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
       }
       const generatedEmail = await fetchGeneratedEmail(currentState, {
-        generateNew: generator !== 'icloud' || normalizeIcloudFetchMode(currentState.icloudFetchMode) === 'always_new',
+        generateNew: shouldFetchCleanOutlookEmail || generator !== 'icloud' || normalizeIcloudFetchMode(currentState.icloudFetchMode) === 'always_new',
         generator,
+        requireCleanOpenAiMailbox: shouldFetchCleanOutlookEmail,
       });
       await addLog(
-        `=== 目标 ${targetRun}/${totalRuns} 轮：${generatorLabel}已就绪：${generatedEmail}（第 ${attemptRuns} 次尝试，第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次获取）===`,
+        `=== 目标 ${targetRun}/${totalRuns} 轮：${generatorLabel}已就绪：${generatedEmail}（第 ${attemptRuns} 次尝试，第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次获取${shouldFetchCleanOutlookEmail ? '，已随机筛选无 OpenAI 邮件邮箱' : ''}）===`,
         'ok'
       );
       return generatedEmail;

@@ -604,3 +604,260 @@ test('outlookEmail provider does not fall back to older detail when newest detai
   await delay(0);
   assert.equal(olderDetailAborted, true);
 });
+
+test('outlookEmail provider randomly picks an account without OpenAI mail', async () => {
+  const state = {
+    email: 'old-current@hotmail.com',
+    emailGenerator: 'outlook-email',
+    mailProvider: 'outlook-email',
+    outlookEmailApiKey: 'test-key',
+    outlookEmailBaseUrl: 'http://mail.test',
+    outlookEmailUsedAddresses: ['used@hotmail.com'],
+  };
+  const checkedEmails = [];
+  let savedEmail = '';
+  let persistedSettings = null;
+  const logs = [];
+  const randomValues = [0.8, 0.8, 0, 0];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/api/external/accounts') {
+      return makeJsonResponse({
+        accounts: [
+          { id: 'used', email: 'used@hotmail.com' },
+          { id: 'dirty', email: 'dirty@hotmail.com' },
+          { id: 'clean', email: 'clean@hotmail.com' },
+          { id: 'old', email: 'old-current@hotmail.com' },
+        ],
+      });
+    }
+    if (parsed.pathname === '/api/external/emails') {
+      const email = parsed.searchParams.get('email');
+      checkedEmails.push(email);
+      if (email === 'dirty@hotmail.com') {
+        return makeJsonResponse({
+          emails: [
+            {
+              id: 'openai-old',
+              subject: '你的 ChatGPT 临时验证码',
+              from: 'noreply@tm.openai.com',
+              body_preview: 'OpenAI ChatGPT code',
+              date: '2026-05-23T12:05:01Z',
+            },
+          ],
+        });
+      }
+      return makeJsonResponse({ emails: [] });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+  const provider = globalThis.MultiPageBackgroundOutlookEmailProvider.createOutlookEmailProvider({
+    addLog: async (message, level) => logs.push({ message, level }),
+    buildOutlookEmailHeaders: outlookEmailUtils.buildOutlookEmailHeaders,
+    fetchImpl,
+    getState: async () => state,
+    joinOutlookEmailUrl: outlookEmailUtils.joinOutlookEmailUrl,
+    normalizeOutlookEmailAccounts: outlookEmailUtils.normalizeOutlookEmailAccounts,
+    normalizeOutlookEmailAddress: outlookEmailUtils.normalizeOutlookEmailAddress,
+    normalizeOutlookEmailBaseUrl: outlookEmailUtils.normalizeOutlookEmailBaseUrl,
+    normalizeOutlookEmailMailApiDetail: outlookEmailUtils.normalizeOutlookEmailMailApiDetail,
+    normalizeOutlookEmailMailApiMessages: outlookEmailUtils.normalizeOutlookEmailMailApiMessages,
+    pickVerificationMessageWithTimeFallback: hotmailUtils.pickVerificationMessageWithTimeFallback,
+    persistRegistrationEmailState: async (_state, email) => {
+      savedEmail = email;
+    },
+    setPersistentSettings: async (updates) => {
+      persistedSettings = updates;
+    },
+    random: () => randomValues.shift() ?? 0,
+    sleepWithStop: async () => {},
+  });
+
+  const email = await provider.fetchOutlookEmailAddress(state);
+
+  assert.equal(email, 'clean@hotmail.com');
+  assert.equal(savedEmail, 'clean@hotmail.com');
+  assert.deepEqual(persistedSettings, {
+    outlookEmailUsedAddresses: ['used@hotmail.com', 'clean@hotmail.com'],
+  });
+  assert.equal(checkedEmails[0], 'dirty@hotmail.com');
+  assert.equal(checkedEmails.at(-1), 'clean@hotmail.com');
+  assert.ok(checkedEmails.includes('clean@hotmail.com'));
+  assert.ok(logs.some((item) => item.message.includes('跳过 dirty@hotmail.com')));
+  assert.ok(logs.some((item) => item.message.includes('已随机取用无 OpenAI 邮件的邮箱 clean@hotmail.com')));
+});
+
+test('outlookEmail provider rejects a pool when every account has OpenAI mail', async () => {
+  const state = {
+    emailGenerator: 'outlook-email',
+    mailProvider: 'outlook-email',
+    outlookEmailApiKey: 'test-key',
+    outlookEmailBaseUrl: 'http://mail.test',
+  };
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/api/external/accounts') {
+      return makeJsonResponse({
+        accounts: [
+          { id: 'first', email: 'first@hotmail.com' },
+          { id: 'second', email: 'second@hotmail.com' },
+        ],
+      });
+    }
+    if (parsed.pathname === '/api/external/emails') {
+      return makeJsonResponse({
+        emails: [
+          {
+            id: 'openai-old',
+            subject: '你的 ChatGPT 临时验证码',
+            from: 'noreply@tm.openai.com',
+            body_preview: 'OpenAI ChatGPT code',
+            date: '2026-05-23T12:05:01Z',
+          },
+        ],
+      });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+  const provider = globalThis.MultiPageBackgroundOutlookEmailProvider.createOutlookEmailProvider({
+    addLog: async () => {},
+    buildOutlookEmailHeaders: outlookEmailUtils.buildOutlookEmailHeaders,
+    fetchImpl,
+    getState: async () => state,
+    joinOutlookEmailUrl: outlookEmailUtils.joinOutlookEmailUrl,
+    normalizeOutlookEmailAccounts: outlookEmailUtils.normalizeOutlookEmailAccounts,
+    normalizeOutlookEmailAddress: outlookEmailUtils.normalizeOutlookEmailAddress,
+    normalizeOutlookEmailBaseUrl: outlookEmailUtils.normalizeOutlookEmailBaseUrl,
+    normalizeOutlookEmailMailApiDetail: outlookEmailUtils.normalizeOutlookEmailMailApiDetail,
+    normalizeOutlookEmailMailApiMessages: outlookEmailUtils.normalizeOutlookEmailMailApiMessages,
+    pickVerificationMessageWithTimeFallback: hotmailUtils.pickVerificationMessageWithTimeFallback,
+    random: () => 0,
+    sleepWithStop: async () => {},
+  });
+
+  await assert.rejects(
+    () => provider.fetchOutlookEmailAddress(state),
+    /没有找到无 OpenAI 邮件的可用邮箱/
+  );
+});
+
+test('outlookEmail provider falls back when all folder is unsupported during clean check', async () => {
+  const state = {
+    emailGenerator: 'outlook-email',
+    mailProvider: 'outlook-email',
+    outlookEmailApiKey: 'test-key',
+    outlookEmailBaseUrl: 'http://mail.test',
+  };
+  const requestedFolders = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/api/external/accounts') {
+      return makeJsonResponse({
+        accounts: [{ id: 'clean', email: 'clean@hotmail.com' }],
+      });
+    }
+    if (parsed.pathname === '/api/external/emails') {
+      const folder = parsed.searchParams.get('folder');
+      requestedFolders.push(folder);
+      if (folder === 'all') {
+        return {
+          ok: false,
+          status: 400,
+          async text() {
+            return JSON.stringify({ message: 'unsupported folder all' });
+          },
+        };
+      }
+      return makeJsonResponse({ emails: [] });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+  const provider = globalThis.MultiPageBackgroundOutlookEmailProvider.createOutlookEmailProvider({
+    addLog: async () => {},
+    buildOutlookEmailHeaders: outlookEmailUtils.buildOutlookEmailHeaders,
+    fetchImpl,
+    getState: async () => state,
+    joinOutlookEmailUrl: outlookEmailUtils.joinOutlookEmailUrl,
+    normalizeOutlookEmailAccounts: outlookEmailUtils.normalizeOutlookEmailAccounts,
+    normalizeOutlookEmailAddress: outlookEmailUtils.normalizeOutlookEmailAddress,
+    normalizeOutlookEmailBaseUrl: outlookEmailUtils.normalizeOutlookEmailBaseUrl,
+    normalizeOutlookEmailMailApiDetail: outlookEmailUtils.normalizeOutlookEmailMailApiDetail,
+    normalizeOutlookEmailMailApiMessages: outlookEmailUtils.normalizeOutlookEmailMailApiMessages,
+    pickVerificationMessageWithTimeFallback: hotmailUtils.pickVerificationMessageWithTimeFallback,
+    random: () => 0,
+    sleepWithStop: async () => {},
+  });
+
+  const email = await provider.fetchOutlookEmailAddress(state);
+
+  assert.equal(email, 'clean@hotmail.com');
+  assert.deepEqual(requestedFolders.slice(0, 3), ['all', 'inbox', 'junkemail']);
+});
+
+test('outlookEmail provider confirms suspicious list rows before rejecting an account', async () => {
+  const state = {
+    emailGenerator: 'outlook-email',
+    mailProvider: 'outlook-email',
+    outlookEmailApiKey: 'test-key',
+    outlookEmailBaseUrl: 'http://mail.test',
+  };
+  const detailRequests = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/api/external/accounts') {
+      return makeJsonResponse({
+        accounts: [{ id: 'clean', email: 'clean@hotmail.com' }],
+      });
+    }
+    if (parsed.pathname === '/api/external/emails') {
+      if (parsed.searchParams.get('keyword') === 'openai') {
+        return makeJsonResponse({
+          emails: [
+            {
+              id: 'marketing-1',
+              id_mode: 'imap',
+              subject: 'Newsletter',
+              from: 'news@example.com',
+              body_preview: '',
+              date: '2026-05-23T12:05:01Z',
+            },
+          ],
+        });
+      }
+      return makeJsonResponse({ emails: [] });
+    }
+    if (parsed.pathname.includes('/api/external/email/')) {
+      detailRequests.push(parsed.pathname);
+      return makeJsonResponse({
+        email: {
+          id: 'marketing-1',
+          subject: 'Newsletter',
+          from: 'news@example.com',
+          body: '<html><body>Ordinary newsletter body</body></html>',
+          date: '2026-05-23T12:05:01Z',
+        },
+      });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+  const provider = globalThis.MultiPageBackgroundOutlookEmailProvider.createOutlookEmailProvider({
+    addLog: async () => {},
+    buildOutlookEmailHeaders: outlookEmailUtils.buildOutlookEmailHeaders,
+    fetchImpl,
+    getState: async () => state,
+    joinOutlookEmailUrl: outlookEmailUtils.joinOutlookEmailUrl,
+    normalizeOutlookEmailAccounts: outlookEmailUtils.normalizeOutlookEmailAccounts,
+    normalizeOutlookEmailAddress: outlookEmailUtils.normalizeOutlookEmailAddress,
+    normalizeOutlookEmailBaseUrl: outlookEmailUtils.normalizeOutlookEmailBaseUrl,
+    normalizeOutlookEmailMailApiDetail: outlookEmailUtils.normalizeOutlookEmailMailApiDetail,
+    normalizeOutlookEmailMailApiMessages: outlookEmailUtils.normalizeOutlookEmailMailApiMessages,
+    pickVerificationMessageWithTimeFallback: hotmailUtils.pickVerificationMessageWithTimeFallback,
+    random: () => 0,
+    sleepWithStop: async () => {},
+  });
+
+  const email = await provider.fetchOutlookEmailAddress(state);
+
+  assert.equal(email, 'clean@hotmail.com');
+  assert.equal(detailRequests.length, 1);
+});

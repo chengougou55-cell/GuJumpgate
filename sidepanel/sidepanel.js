@@ -581,6 +581,7 @@ const PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION = 'sub2api_codex_sessio
 const PLUS_ACCOUNT_ACCESS_STRATEGY_CPA_CODEX_SESSION = 'cpa_codex_session';
 const ACCOUNT_ACCESS_STRATEGY_UI_OAUTH = 'oauth';
 const ACCOUNT_ACCESS_STRATEGY_UI_SESSION_JSON = 'session_json';
+const DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY = PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION;
 const DEFAULT_GPC_HELPER_API_URL = 'https://your-gpc-helper-domain.example';
 const GPC_HELPER_PORTAL_URL = '';
 const GPC_HELPER_PHONE_MODE_AUTO = 'auto';
@@ -597,7 +598,7 @@ const PHONE_SIGNUP_REUSE_LOCK_TITLE = '手机号注册流程不使用号码复�
 let latestState = null;
 let currentPlusModeEnabled = false;
 let currentPlusPaymentMethod = DEFAULT_PLUS_PAYMENT_METHOD;
-let currentPlusAccountAccessStrategy = PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH;
+let currentPlusAccountAccessStrategy = DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY;
 let currentSignupMethod = DEFAULT_SIGNUP_METHOD;
 let currentPhoneSignupReloginAfterBindEmailEnabled = DEFAULT_PHONE_SIGNUP_RELOGIN_AFTER_BIND_EMAIL_ENABLED;
 let hostedSmsPoolExpanded = false;
@@ -895,9 +896,9 @@ function initPhoneVerificationSectionExpandedState() {
 function getStepDefinitionsForMode(plusModeEnabled = false, options = {}) {
   const defaultFlowId = typeof DEFAULT_ACTIVE_FLOW_ID !== 'undefined' ? DEFAULT_ACTIVE_FLOW_ID : 'openai';
   const defaultMethod = typeof DEFAULT_PLUS_PAYMENT_METHOD !== 'undefined' ? DEFAULT_PLUS_PAYMENT_METHOD : 'paypal';
-  const defaultAccountAccessStrategy = typeof PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH === 'string'
-    ? PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH
-    : 'oauth';
+  const defaultAccountAccessStrategy = typeof DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY === 'string'
+    ? DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY
+    : 'sub2api_codex_session';
   const rawPaymentMethod = typeof options === 'string'
     ? options
     : (options.plusPaymentMethod || currentPlusPaymentMethod || defaultMethod);
@@ -941,9 +942,9 @@ function getStepDefinitionsForMode(plusModeEnabled = false, options = {}) {
 function getWorkflowNodesForMode(plusModeEnabled = false, options = {}) {
   const defaultFlowId = typeof DEFAULT_ACTIVE_FLOW_ID !== 'undefined' ? DEFAULT_ACTIVE_FLOW_ID : 'openai';
   const defaultMethod = typeof DEFAULT_PLUS_PAYMENT_METHOD !== 'undefined' ? DEFAULT_PLUS_PAYMENT_METHOD : 'paypal';
-  const defaultAccountAccessStrategy = typeof PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH === 'string'
-    ? PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH
-    : 'oauth';
+  const defaultAccountAccessStrategy = typeof DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY === 'string'
+    ? DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY
+    : 'sub2api_codex_session';
   const rawPaymentMethod = typeof options === 'string'
     ? options
     : (options.plusPaymentMethod || currentPlusPaymentMethod || defaultMethod);
@@ -3211,7 +3212,7 @@ function normalizeSupportedMailProvider(value = '') {
   if (normalized === OUTLOOK_EMAIL_PROVIDER) {
     return OUTLOOK_EMAIL_PROVIDER;
   }
-  return HOTMAIL_PROVIDER;
+  return OUTLOOK_EMAIL_PROVIDER;
 }
 
 function normalizeVerificationResendCount(value, fallback) {
@@ -4234,7 +4235,7 @@ function collectSettingsPayload() {
         || latestState?.panelMode
         || (typeof DEFAULT_PANEL_MODE === 'string' ? DEFAULT_PANEL_MODE : 'local-cpa-json')
       ),
-      plusAccountAccessStrategy: PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH,
+      plusAccountAccessStrategy: DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY,
     };
   const rawPanelMode = selectedExportSettings.panelMode;
   const rawPlusAccountAccessStrategy = normalizePlusAccountAccessStrategy(
@@ -8350,6 +8351,11 @@ function getExportTargetForPanelMode(panelMode = '') {
 function getAccountAccessStrategyUiValueForState(state = latestState) {
   const panelMode = normalizePanelMode(state?.panelMode || DEFAULT_PANEL_MODE);
   const strategy = normalizePlusAccountAccessStrategy(state?.plusAccountAccessStrategy);
+  if (!state || state.plusAccountAccessStrategy === undefined || state.plusAccountAccessStrategy === null || state.plusAccountAccessStrategy === '') {
+    return panelMode === 'codex2api'
+      ? ACCOUNT_ACCESS_STRATEGY_UI_OAUTH
+      : ACCOUNT_ACCESS_STRATEGY_UI_SESSION_JSON;
+  }
   if (panelMode === LOCAL_CPA_JSON_NO_RT_PANEL_MODE) {
     return ACCOUNT_ACCESS_STRATEGY_UI_SESSION_JSON;
   }
@@ -8448,6 +8454,7 @@ function resolveCurrentSidepanelCapabilities(options = {}) {
   return registry.resolveSidepanelCapabilities({
     activeFlowId: options?.activeFlowId ?? state?.activeFlowId,
     panelMode: options?.panelMode ?? state?.panelMode,
+    plusAccountAccessStrategy: options?.plusAccountAccessStrategy ?? state?.plusAccountAccessStrategy,
     signupMethod: options?.signupMethod ?? state?.signupMethod,
     state,
   });

@@ -27,10 +27,42 @@ test('sidepanel initial export target selects SUB2API', () => {
   assert.doesNotMatch(html, /<option value="local-cpa-json" selected>/);
 });
 
+test('default SUB2API url points to configured admin accounts page', () => {
+  const backgroundScript = readProjectFile('background.js');
+
+  assert.match(backgroundScript, /const DEFAULT_SUB2API_URL = 'http:\/\/156\.239\.40\.207:18080\/admin\/accounts';/);
+  assert.match(backgroundScript, /case 'sub2apiUrl':\n\s+return normalizeSub2ApiUrl\(value\);/);
+});
+
+test('sidepanel initial account access strategy selects session JSON import', () => {
+  const html = readProjectFile('sidepanel/sidepanel.html');
+  const backgroundScript = readProjectFile('background.js');
+  const sidepanelScript = readProjectFile('sidepanel/sidepanel.js');
+
+  assert.match(html, /<option value="session_json" selected>SESSION JSON导入<\/option>/);
+  assert.doesNotMatch(html, /<option value="oauth" selected>Oauth<\/option>/);
+  assert.match(backgroundScript, /const DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY = PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION;/);
+  assert.match(backgroundScript, /plusAccountAccessStrategy: DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY,/);
+  assert.match(sidepanelScript, /const DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY = PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION;/);
+  assert.match(sidepanelScript, /let currentPlusAccountAccessStrategy = DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY;/);
+});
+
 test('sidepanel initial checkout conversion uses cloud mode', () => {
   const html = readProjectFile('sidepanel/sidepanel.html');
 
   assert.match(html, /<input type="checkbox" id="input-plus-checkout-cloud-conversion-enabled" checked \/>/);
+});
+
+test('outlookEmail is the default mail service', () => {
+  const html = readProjectFile('sidepanel/sidepanel.html');
+  const backgroundScript = readProjectFile('background.js');
+  const sidepanelScript = readProjectFile('sidepanel/sidepanel.js');
+
+  assert.match(html, /<option value="outlook-email" selected>outlookEmail<\/option>/);
+  assert.doesNotMatch(html, /<option value="hotmail-api" selected>/);
+  assert.match(backgroundScript, /mailProvider: OUTLOOK_EMAIL_PROVIDER,/);
+  assert.match(backgroundScript, /emailGenerator: OUTLOOK_EMAIL_GENERATOR,/);
+  assert.match(sidepanelScript, /return OUTLOOK_EMAIL_PROVIDER;\n}/);
 });
 
 test('sidepanel exposes one-click log copy and txt export controls', () => {

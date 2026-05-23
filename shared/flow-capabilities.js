@@ -9,6 +9,7 @@
   const PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH = 'oauth';
   const PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION = 'sub2api_codex_session';
   const PLUS_ACCOUNT_ACCESS_STRATEGY_CPA_CODEX_SESSION = 'cpa_codex_session';
+  const DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY = PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION;
   const VALID_PANEL_MODES = Object.freeze(['local-cpa-json', LOCAL_CPA_JSON_NO_RT_PANEL_MODE, 'cpa', 'sub2api', 'codex2api']);
 
   const DEFAULT_FLOW_CAPABILITIES = Object.freeze({
@@ -266,10 +267,13 @@
         : (effectiveSignupMethods.includes(SIGNUP_METHOD_EMAIL)
           ? SIGNUP_METHOD_EMAIL
           : effectiveSignupMethods[0]);
-      const requestedPlusAccountAccessStrategy = normalizePlusAccountAccessStrategyForPanel(
-        options?.plusAccountAccessStrategy ?? state?.plusAccountAccessStrategy,
-        effectivePanelMode
-      );
+      const rawPlusAccountAccessStrategy = options?.plusAccountAccessStrategy
+        ?? state?.plusAccountAccessStrategy;
+      const requestedPlusAccountAccessStrategy = rawPlusAccountAccessStrategy === undefined
+        || rawPlusAccountAccessStrategy === null
+        || rawPlusAccountAccessStrategy === ''
+        ? normalizePlusAccountAccessStrategyForPanel(DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY, effectivePanelMode)
+        : normalizePlusAccountAccessStrategyForPanel(rawPlusAccountAccessStrategy, effectivePanelMode);
       const panelPlusAccountAccessStrategies = (Array.isArray(panelState.supportedPlusAccountAccessStrategies)
         && panelState.supportedPlusAccountAccessStrategies.length > 0
         ? panelState.supportedPlusAccountAccessStrategies
@@ -523,6 +527,7 @@
     DEFAULT_FLOW_ID,
     DEFAULT_PANEL_CAPABILITIES,
     DEFAULT_PANEL_MODE,
+    DEFAULT_PLUS_ACCOUNT_ACCESS_STRATEGY,
     FLOW_CAPABILITIES,
     PANEL_CAPABILITIES,
     PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH,

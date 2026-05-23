@@ -5,6 +5,14 @@
   const OUTLOOK_EMAIL_JUNK_LIST_TIMEOUT_MS = 8000;
   const OUTLOOK_EMAIL_DETAIL_TIMEOUT_MS = 8000;
   const OUTLOOK_EMAIL_DETAIL_LIMIT = 3;
+  const OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS = 8000;
+  const OUTLOOK_EMAIL_CLEAN_CHECK_LIMIT = 10;
+  const OUTLOOK_EMAIL_OPENAI_PROBES = Object.freeze([
+    { fromContains: 'openai' },
+    { keyword: 'openai' },
+    { keyword: 'chatgpt' },
+    { subjectContains: 'chatgpt' },
+  ]);
 
   function createOutlookEmailProvider(deps = {}) {
     const {
@@ -25,8 +33,10 @@
       normalizeOutlookEmailMailApiMessages,
       persistRegistrationEmailState = null,
       pickVerificationMessageWithTimeFallback,
+      random = Math.random,
       setEmailState = async () => {},
       setPersistentSettings = async () => {},
+      broadcastDataUpdate = async () => {},
       sleepWithStop = async () => {},
       throwIfStopped = () => {},
     } = deps;
@@ -172,15 +182,202 @@
       };
     }
 
-    function pickOutlookEmailAccount(accounts = [], state = {}) {
+    function shuffleOutlookEmailAccounts(accounts = []) {
+      const list = Array.isArray(accounts) ? accounts.slice() : [];
+      for (let index = list.length - 1; index > 0; index -= 1) {
+        const rawRandom = Number(typeof random === 'function' ? random() : Math.random());
+        const boundedRandom = Number.isFinite(rawRandom)
+          ? Math.min(0.999999999, Math.max(0, rawRandom))
+          : Math.random();
+        const swapIndex = Math.floor(boundedRandom * (index + 1));
+        [list[index], list[swapIndex]] = [list[swapIndex], list[index]];
+      }
+      return list;
+    }
+
+    function getOutlookEmailAccountCandidates(accounts = [], state = {}) {
       const config = getOutlookEmailConfig(state);
       const usedSet = new Set(config.usedAddresses);
-      const currentEmail = normalizeOutlookEmailReceiveMailbox(state.email);
-      if (currentEmail) {
-        const currentAccount = accounts.find((account) => account.email === currentEmail) || null;
-        if (currentAccount) return currentAccount;
+      const uniqueAccounts = [];
+      const seen = new Set();
+      for (const account of Array.isArray(accounts) ? accounts : []) {
+        const email = normalizeOutlookEmailReceiveMailbox(account?.email);
+        if (!email || seen.has(email)) continue;
+        seen.add(email);
+        uniqueAccounts.push({ ...account, email });
       }
-      return accounts.find((account) => account?.email && !usedSet.has(account.email)) || accounts[0] || null;
+
+      const preferred = [];
+      const fallback = [];
+      for (const account of uniqueAccounts) {
+        if (usedSet.has(account.email)) {
+          fallback.push(account);
+        } else {
+          preferred.push(account);
+        }
+      }
+      return [
+        ...shuffleOutlookEmailAccounts(preferred),
+        ...shuffleOutlookEmailAccounts(fallback),
+      ];
+    }
+
+    function isOutlookEmailOpenAiMessage(message = {}) {
+      const text = [
+        message?.from?.emailAddress?.address,
+        message?.subject,
+        message?.bodyPreview,
+        message?.raw,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return /\bopenai\b|chatgpt|tm\.openai\.com|auth\.openai\.com|accounts\.openai\.com/.test(text);
+    }
+
+    function isOutlookEmailAllFolderUnsupportedError(err) {
+      return /folder|mailbox|all|unsupported|invalid|未知|不支持|无效|文件夹|邮箱文件夹/i.test(String(err?.message || ''));
+    }
+
+    function summarizeOutlookEmailOpenAiMessage(message = {}) {
+      const sender = message?.from?.emailAddress?.address || '未知发件人';
+      const subject = message?.subject || '（无主题）';
+      const receivedAt = message?.receivedDateTime || '未知时间';
+      return `${receivedAt} | ${sender} | ${subject}`;
+    }
+
+    async function getConfirmedOutlookEmailOpenAiMessage(state, address, message, options = {}) {
+      if (!message) return null;
+      if (isOutlookEmailOpenAiMessage(message)) {
+        return message;
+      }
+      if (!message.id) {
+        return null;
+      }
+      try {
+        const { message: detailMessage } = await getOutlookEmailMessageDetail(state, {
+          address,
+          messageId: message.id,
+          folder: message.folder || options.folder || '',
+          method: message.idMode || message.raw?.id_mode || '',
+          baseMessage: message,
+          timeoutMs: options.cleanCheckTimeoutMs || OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS,
+        });
+        return isOutlookEmailOpenAiMessage(detailMessage) ? detailMessage : null;
+      } catch (err) {
+        await addLog(`outlookEmail：读取 ${address} 的可疑 OpenAI 邮件详情失败：${err.message}`, 'warn');
+        throw err;
+      }
+    }
+
+    async function listOutlookEmailProbeMessages(state, targetEmail, probe, options = {}) {
+      try {
+        const result = await listOutlookEmailMessages(state, {
+          address: targetEmail,
+          folder: 'all',
+          limit: options.limit,
+          timeoutMs: options.cleanCheckTimeoutMs || OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS,
+          ...probe,
+        });
+        return result.messages || [];
+      } catch (err) {
+        if (!isOutlookEmailAllFolderUnsupportedError(err)) {
+          throw err;
+        }
+        await addLog(`outlookEmail：folder=all 查询失败，回退检查收件箱和垃圾邮件：${err.message}`, 'warn');
+      }
+
+      const folders = ['inbox', 'junkemail'];
+      const results = [];
+      for (const folder of folders) {
+        throwIfStopped();
+        const { messages } = await listOutlookEmailMessages(state, {
+          address: targetEmail,
+          folder,
+          limit: options.limit,
+          timeoutMs: options.cleanCheckTimeoutMs || OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS,
+          ...probe,
+        });
+        results.push(...(messages || []));
+      }
+      return results;
+    }
+
+    async function checkOutlookEmailHasOpenAiMail(state, address, options = {}) {
+      const targetEmail = normalizeOutlookEmailReceiveMailbox(address);
+      if (!targetEmail) {
+        throw new Error('outlookEmail 检查 OpenAI 邮件时缺少目标邮箱地址。');
+      }
+
+      const probes = Array.isArray(options.openAiProbes) && options.openAiProbes.length
+        ? options.openAiProbes
+        : OUTLOOK_EMAIL_OPENAI_PROBES;
+      const limit = Math.max(1, Math.min(50, Number(options.cleanCheckLimit) || OUTLOOK_EMAIL_CLEAN_CHECK_LIMIT));
+      for (const probe of probes) {
+        throwIfStopped();
+        const messages = await listOutlookEmailProbeMessages(state, targetEmail, probe, {
+          limit,
+          timeoutMs: options.cleanCheckTimeoutMs || OUTLOOK_EMAIL_CLEAN_CHECK_TIMEOUT_MS,
+        });
+        for (const message of messages || []) {
+          const confirmedMessage = await getConfirmedOutlookEmailOpenAiMessage(state, targetEmail, message, {
+            folder: message.folder || 'all',
+            cleanCheckTimeoutMs: options.cleanCheckTimeoutMs,
+          });
+          if (!confirmedMessage) {
+            continue;
+          }
+          return {
+            hasOpenAiMail: true,
+            message: confirmedMessage,
+            probe,
+          };
+        }
+      }
+      return { hasOpenAiMail: false, message: null, probe: null };
+    }
+
+    async function pickOutlookEmailAccount(accounts = [], state = {}, options = {}) {
+      const candidates = getOutlookEmailAccountCandidates(accounts, state);
+      const requireCleanOpenAiMailbox = options.requireCleanOpenAiMailbox !== false;
+      if (!requireCleanOpenAiMailbox) {
+        return candidates[0] || null;
+      }
+
+      let checkedCount = 0;
+      let dirtyCount = 0;
+      let failedCount = 0;
+      for (const account of candidates) {
+        throwIfStopped();
+        checkedCount += 1;
+        try {
+          const checkResult = await checkOutlookEmailHasOpenAiMail(state, account.email, options);
+          if (!checkResult.hasOpenAiMail) {
+            return {
+              ...account,
+              cleanCheck: {
+                checkedCount,
+                dirtyCount,
+                failedCount,
+              },
+            };
+          }
+          dirtyCount += 1;
+          await addLog(
+            `outlookEmail：跳过 ${account.email}，邮箱内已有 OpenAI/ChatGPT 邮件（${summarizeOutlookEmailOpenAiMessage(checkResult.message)}）。`,
+            'info'
+          );
+        } catch (err) {
+          failedCount += 1;
+          await addLog(`outlookEmail：跳过 ${account.email}，检查 OpenAI 邮件失败：${err.message}`, 'warn');
+        }
+      }
+
+      const reasonParts = [];
+      if (dirtyCount) reasonParts.push(`${dirtyCount} 个已有 OpenAI/ChatGPT 邮件`);
+      if (failedCount) reasonParts.push(`${failedCount} 个检查失败`);
+      const reason = reasonParts.length ? `（${reasonParts.join('，')}）` : '';
+      throw new Error(`outlookEmail 没有找到无 OpenAI 邮件的可用邮箱${reason}。`);
     }
 
     async function setOutlookEmailAddressUsed(email, options = {}) {
@@ -204,16 +401,27 @@
         limit: options.limit || 10000,
         groupId: options.groupId || latestState.outlookEmailGroupId || '',
       });
-      const account = pickOutlookEmailAccount(accounts, latestState);
+      const account = await pickOutlookEmailAccount(accounts, latestState, {
+        cleanCheckLimit: options.cleanCheckLimit,
+        cleanCheckTimeoutMs: options.cleanCheckTimeoutMs,
+        openAiProbes: options.openAiProbes,
+        requireCleanOpenAiMailbox: options.requireCleanOpenAiMailbox,
+      });
       if (!account?.email) {
         throw new Error('outlookEmail 没有返回可用邮箱。');
       }
 
+      const usedAddresses = normalizeOutlookEmailUsedAddresses([
+        ...(latestState.outlookEmailUsedAddresses || []),
+        account.email,
+      ]);
+      await setPersistentSettings({ outlookEmailUsedAddresses: usedAddresses });
+      await broadcastDataUpdate({ outlookEmailUsedAddresses: usedAddresses });
       await persistResolvedEmailState(latestState, account.email, {
         source: 'generated:outlook-email',
         preserveAccountIdentity: Boolean(options?.preserveAccountIdentity),
       });
-      await addLog(`outlookEmail：已取用 ${account.email}`, 'ok');
+      await addLog(`outlookEmail：已随机取用无 OpenAI 邮件的邮箱 ${account.email}`, 'ok');
       return account.email;
     }
 
