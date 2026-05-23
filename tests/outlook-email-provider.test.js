@@ -321,6 +321,78 @@ test('outlookEmail provider lists inbox and junk in parallel', async () => {
   assert.ok(elapsedMs < 90, `expected parallel list requests, got ${elapsedMs}ms`);
 });
 
+test('outlookEmail provider returns junk match before slow inbox times out', async () => {
+  let inboxAborted = false;
+  const state = {
+    email: 'fastjunk@hotmail.com',
+    emailGenerator: 'outlook-email',
+    mailProvider: 'outlook-email',
+    outlookEmailApiKey: 'test-key',
+    outlookEmailBaseUrl: 'http://mail.test',
+  };
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/api/external/emails') {
+      const folder = parsed.searchParams.get('folder');
+      if (folder === 'inbox') {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, 120);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            inboxAborted = true;
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          }, { once: true });
+        });
+        return makeJsonResponse({ emails: [] });
+      }
+      await delay(5);
+      return makeJsonResponse({
+        emails: [
+          {
+            id: 'junk-code',
+            id_mode: 'sequence',
+            subject: '你的 ChatGPT 临时验证码',
+            from: 'noreply@tm.openai.com',
+            body_preview: '输入此临时验证码以继续：778899',
+            date: '2026-05-23T13:43:19Z',
+          },
+        ],
+      });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+  const provider = globalThis.MultiPageBackgroundOutlookEmailProvider.createOutlookEmailProvider({
+    addLog: async () => {},
+    buildOutlookEmailHeaders: outlookEmailUtils.buildOutlookEmailHeaders,
+    fetchImpl,
+    getState: async () => state,
+    joinOutlookEmailUrl: outlookEmailUtils.joinOutlookEmailUrl,
+    normalizeOutlookEmailAccounts: outlookEmailUtils.normalizeOutlookEmailAccounts,
+    normalizeOutlookEmailAddress: outlookEmailUtils.normalizeOutlookEmailAddress,
+    normalizeOutlookEmailBaseUrl: outlookEmailUtils.normalizeOutlookEmailBaseUrl,
+    normalizeOutlookEmailMailApiDetail: outlookEmailUtils.normalizeOutlookEmailMailApiDetail,
+    normalizeOutlookEmailMailApiMessages: outlookEmailUtils.normalizeOutlookEmailMailApiMessages,
+    pickVerificationMessageWithTimeFallback: hotmailUtils.pickVerificationMessageWithTimeFallback,
+    sleepWithStop: async () => {},
+  });
+
+  const started = Date.now();
+  const result = await provider.pollOutlookEmailVerificationCode(4, state, {
+    filterAfterTimestamp: Date.UTC(2026, 4, 23, 13, 43, 0),
+    senderFilters: ['openai', 'noreply'],
+    subjectFilters: ['验证码', '代码'],
+    requiredKeywords: ['chatgpt', '代码'],
+    requiredAnyKeywords: ['openai', 'chatgpt'],
+    maxAttempts: 1,
+  });
+  const elapsedMs = Date.now() - started;
+  await delay(0);
+
+  assert.equal(result.code, '778899');
+  assert.ok(elapsedMs < 80, `expected junk match before slow inbox, got ${elapsedMs}ms`);
+  assert.equal(inboxAborted, true);
+});
+
 test('outlookEmail provider returns on first matching detail and aborts slower details', async () => {
   const requests = [];
   let slowDetailAborted = false;

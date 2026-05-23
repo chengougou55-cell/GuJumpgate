@@ -23,6 +23,7 @@
   const HOSTED_CHECKOUT_PAYPAL_LOOP_TIMEOUT_MS = 10 * 60 * 1000;
   const HOSTED_CHECKOUT_VERIFICATION_POLL_ATTEMPTS = 12;
   const HOSTED_CHECKOUT_VERIFICATION_POLL_INTERVAL_MS = 5000;
+  const HOSTED_CHECKOUT_VERIFICATION_REQUEST_TIMEOUT_MS = 8000;
   const HOSTED_CHECKOUT_VERIFICATION_INVALID_RESEND_DELAY_MS = 3000;
   const HOSTED_CHECKOUT_VERIFICATION_POPUP_DELAY_MIN_SECONDS = 0;
   const HOSTED_CHECKOUT_VERIFICATION_POPUP_DELAY_MAX_SECONDS = 60;
@@ -170,6 +171,10 @@
       return (normalized || fallback)
         .replace(/，?已自动停止整个流程。?/g, '')
         .replace(/当前账号没有免费试用资格。?$/g, '当前账号没有免费试用资格。');
+    }
+
+    function shouldLetAutoRunHandleNonFreeTrial(state = {}) {
+      return Boolean(state?.autoRunning);
     }
 
     function normalizeHostedCheckoutVerificationPopupDelaySeconds(
@@ -1333,23 +1338,16 @@ function FindProxyForURL(url, host) {
       });
       const verificationUrl = runtimeConfig.verificationUrl;
       await addLog(`步骤 6：当前 hosted checkout 验证码接口配置为 ${verificationUrl || '(空)'}。`, 'info');
-      const fetcher = typeof fetchImpl === 'function'
-        ? fetchImpl
-        : (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
-      if (typeof fetcher !== 'function') {
-        throw new Error('当前运行环境不支持 fetch，无法获取 hosted checkout 验证码。');
-      }
       if (!verificationUrl) {
         throw new Error('当前未配置 hosted checkout 验证码接口地址。');
       }
       const separator = verificationUrl.includes('?') ? '&' : '?';
-      const response = await fetcher(`${verificationUrl}${separator}t=${Date.now()}`, {
+      const { text } = await fetchHostedCheckoutVerificationText(`${verificationUrl}${separator}t=${Date.now()}`, {
         method: 'GET',
         headers: {
           Accept: 'application/json,text/plain,*/*',
         },
       });
-      const text = await response.text().catch(() => '');
       let payload = text;
       try {
         payload = text ? JSON.parse(text) : {};
@@ -1377,20 +1375,13 @@ function FindProxyForURL(url, host) {
     async function fetchHostedCheckoutVerificationCodeManually(options = {}) {
       const manualVerificationUrl = String(options?.verificationUrl || '').trim();
       if (manualVerificationUrl) {
-        const fetcher = typeof fetchImpl === 'function'
-          ? fetchImpl
-          : (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
-        if (typeof fetcher !== 'function') {
-          throw new Error('当前运行环境不支持 fetch，无法获取 hosted checkout 验证码。');
-        }
         const separator = manualVerificationUrl.includes('?') ? '&' : '?';
-        const response = await fetcher(`${manualVerificationUrl}${separator}t=${Date.now()}`, {
+        const { text } = await fetchHostedCheckoutVerificationText(`${manualVerificationUrl}${separator}t=${Date.now()}`, {
           method: 'GET',
           headers: {
             Accept: 'application/json,text/plain,*/*',
           },
-        });
-        const text = await response.text().catch(() => '');
+        }, options.timeoutMs || options.requestTimeoutMs);
         let payload = text;
         try {
           payload = text ? JSON.parse(text) : {};
@@ -1415,6 +1406,49 @@ function FindProxyForURL(url, host) {
         };
       } finally {
         await clearHostedCheckoutCurrentSmsEntry();
+      }
+    }
+
+    async function fetchHostedCheckoutVerificationText(url, options = {}, timeoutMs = HOSTED_CHECKOUT_VERIFICATION_REQUEST_TIMEOUT_MS) {
+      const fetcher = typeof fetchImpl === 'function'
+        ? fetchImpl
+        : (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
+      if (typeof fetcher !== 'function') {
+        throw new Error('当前运行环境不支持 fetch，无法获取 hosted checkout 验证码。');
+      }
+      const effectiveTimeoutMs = Math.max(1, Number(timeoutMs) || HOSTED_CHECKOUT_VERIFICATION_REQUEST_TIMEOUT_MS);
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      let didTimeout = false;
+      let timer = null;
+      const buildTimeoutError = () => new Error(`hosted checkout 验证码接口请求超时（>${Math.round(effectiveTimeoutMs / 1000)} 秒）。`);
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          didTimeout = true;
+          if (controller) {
+            controller.abort();
+          }
+          reject(buildTimeoutError());
+        }, effectiveTimeoutMs);
+      });
+      try {
+        const response = await Promise.race([
+          fetcher(url, { ...options, ...(controller ? { signal: controller.signal } : {}) }),
+          timeoutPromise,
+        ]);
+        const text = await Promise.race([
+          response.text().catch(() => ''),
+          timeoutPromise,
+        ]);
+        return { response, text };
+      } catch (error) {
+        if (didTimeout || error?.name === 'AbortError') {
+          throw buildTimeoutError();
+        }
+        throw error;
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
       }
     }
 
@@ -1814,18 +1848,24 @@ function FindProxyForURL(url, host) {
               ? await getState().catch(() => ({}))
               : {};
             const shouldRetryNonFreeTrial = Boolean(latestState?.autoRunRetryNonFreeTrial);
+            const letAutoRunHandleNonFreeTrial = shouldLetAutoRunHandleNonFreeTrial(latestState);
             const stopReason = normalizeNonFreeTrialLogMessage(message, {
-              willRetry: shouldRetryNonFreeTrial,
+              willRetry: shouldRetryNonFreeTrial || letAutoRunHandleNonFreeTrial,
             });
             await addLog(
               shouldRetryNonFreeTrial
                 ? `${stopReason} 无试用套餐自动重试已开启，将换新邮箱重走流程。`
+                : letAutoRunHandleNonFreeTrial
+                  ? `${stopReason} 当前轮将失败并继续下一轮。`
                 : stopReason,
               'warn'
             );
-            if (shouldRetryNonFreeTrial && typeof failNodeFromBackground === 'function') {
+            if ((shouldRetryNonFreeTrial || letAutoRunHandleNonFreeTrial) && typeof failNodeFromBackground === 'function') {
               await failNodeFromBackground('plus-checkout-create', `PLUS_CHECKOUT_NON_FREE_TRIAL::${stopReason}`);
               return;
+            }
+            if (letAutoRunHandleNonFreeTrial) {
+              throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::${stopReason}`);
             }
             if (typeof requestStop === 'function') {
               await requestStop({ logMessage: false });

@@ -1701,9 +1701,12 @@
       );
       const stopReason = `步骤 7：${phaseLabel}检测到今日应付金额不是 0（${amountLabel}），说明当前账号没有免费试用资格。`;
       const shouldRetryNonFreeTrial = Boolean(state?.autoRunRetryNonFreeTrial);
+      const letAutoRunHandleNonFreeTrial = Boolean(state?.autoRunning);
       await addLog(
         shouldRetryNonFreeTrial
           ? `${stopReason} 无试用套餐自动重试已开启，将换新邮箱重走流程。`
+          : letAutoRunHandleNonFreeTrial
+            ? `${stopReason} 当前轮将失败并继续下一轮。`
           : `${stopReason}已自动停止整个流程。`,
         'warn'
       );
@@ -1714,6 +1717,9 @@
         });
       }
       if (shouldRetryNonFreeTrial) {
+        throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::${stopReason}`);
+      }
+      if (letAutoRunHandleNonFreeTrial) {
         throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::${stopReason}`);
       }
       if (typeof requestStop === 'function') {

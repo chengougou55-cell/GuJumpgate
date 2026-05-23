@@ -1073,15 +1073,19 @@
               folderTasks[index].controller.abort(new Error('higher-priority-folder-matched'));
             }
           };
+          const abortPendingFolderTasks = (pendingFolderTasks) => {
+            for (const task of pendingFolderTasks.values()) {
+              task.controller.abort(new Error('folder-matched'));
+            }
+          };
 
           const folderErrors = [];
-          for (let folderIndex = 0; folderIndex < folderTasks.length; folderIndex += 1) {
-            const folderResult = await folderTasks[folderIndex].promise;
+          const handleFolderResult = async (folderIndex, folderResult) => {
             const { folderConfig, messages, error } = folderResult;
             if (error) {
               folderErrors.push({ label: folderConfig.label, error });
               await addLog(`步骤 ${step}：outlookEmail ${folderConfig.label}轮询失败：${error.message}`, 'warn');
-              continue;
+              return null;
             }
             try {
               results.push(...messages);
@@ -1110,6 +1114,30 @@
             } catch (err) {
               folderErrors.push({ label: folderConfig.label, error: err });
               await addLog(`步骤 ${step}：outlookEmail ${folderConfig.label}匹配失败：${err.message}`, 'warn');
+            }
+            return null;
+          };
+
+          const pendingFolderTasks = new Map(folderTasks.map((task, folderIndex) => [folderIndex, task]));
+          while (pendingFolderTasks.size) {
+            const { folderIndex, folderResult } = await Promise.race(
+              Array.from(pendingFolderTasks.entries(), ([currentIndex, task]) => task.promise.then(
+                (result) => ({ folderIndex: currentIndex, folderResult: result }),
+                (error) => ({
+                  folderIndex: currentIndex,
+                  folderResult: {
+                    folderConfig: task.folderConfig,
+                    messages: [],
+                    error,
+                  },
+                })
+              ))
+            );
+            pendingFolderTasks.delete(folderIndex);
+            const match = await handleFolderResult(folderIndex, folderResult);
+            if (match) {
+              abortPendingFolderTasks(pendingFolderTasks);
+              return match;
             }
           }
           if (!results.length && folderErrors.length) {

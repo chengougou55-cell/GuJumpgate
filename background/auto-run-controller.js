@@ -972,21 +972,7 @@
               await appendRoundRecordIfNeeded('failed', reason, err);
               cancelPendingCommands('当前轮因认证流程进入 add-phone 已终止。');
               await broadcastStopToContentScripts();
-              if (!autoRunSkipFailures) {
-                await addLog(
-                  `第 ${targetRun}/${totalRuns} 轮触发 add-phone/手机号页，自动重试未开启，当前自动运行将停止。`,
-                  'warn'
-                );
-                stoppedEarly = true;
-                await broadcastAutoRunStatus('stopped', {
-                  currentRun: targetRun,
-                  totalRuns,
-                  attemptRun,
-                  sessionId: 0,
-                });
-                break;
-              }
-
+              await addLog(`第 ${targetRun}/${totalRuns} 轮触发 add-phone/手机号页，将放弃当前账号。`, 'warn');
               await addLog(`第 ${targetRun}/${totalRuns} 轮触发 add-phone/手机号页，本轮将直接失败并跳过剩余重试。`, 'warn');
               await addLog(
                 targetRun < totalRuns
@@ -1007,21 +993,7 @@
               await appendRoundRecordIfNeeded('failed', reason, err);
               cancelPendingCommands('当前轮因接码号池暂无可用号码已终止。');
               await broadcastStopToContentScripts();
-              if (!autoRunSkipFailures) {
-                await addLog(
-                  `第 ${targetRun}/${totalRuns} 轮接码号池暂无可用号码，自动重试未开启，当前自动运行将停止。`,
-                  'warn'
-                );
-                stoppedEarly = true;
-                await broadcastAutoRunStatus('stopped', {
-                  currentRun: targetRun,
-                  totalRuns,
-                  attemptRun,
-                  sessionId: 0,
-                });
-                break;
-              }
-
+              await addLog(`第 ${targetRun}/${totalRuns} 轮接码号池暂无可用号码，将放弃当前轮。`, 'warn');
               await addLog(`第 ${targetRun}/${totalRuns} 轮接码号池暂无可用号码，本轮将直接失败并跳过剩余重试。`, 'warn');
               await addLog(
                 targetRun < totalRuns
@@ -1042,23 +1014,12 @@
               await appendRoundRecordIfNeeded('failed', reason, err);
               cancelPendingCommands('当前轮因 Plus 免费试用资格不可用已终止。');
               await broadcastStopToContentScripts();
-              if (!autoRunSkipFailures) {
-                await addLog(
-                  autoRunRetryNonFreeTrial
-                    ? `第 ${targetRun}/${totalRuns} 轮检测到 Plus 今日应付金额非 0，已达到无试用套餐自动重试上限，当前自动运行将停止。`
-                    : `第 ${targetRun}/${totalRuns} 轮检测到 Plus 今日应付金额非 0，自动重试未开启，当前自动运行将停止。`,
-                  'warn'
-                );
-                stoppedEarly = true;
-                await broadcastAutoRunStatus('stopped', {
-                  currentRun: targetRun,
-                  totalRuns,
-                  attemptRun,
-                  sessionId: 0,
-                });
-                break;
-              }
-
+              await addLog(
+                autoRunRetryNonFreeTrial
+                  ? `第 ${targetRun}/${totalRuns} 轮检测到 Plus 今日应付金额非 0，已达到无试用套餐自动重试上限。`
+                  : `第 ${targetRun}/${totalRuns} 轮检测到 Plus 今日应付金额非 0，将放弃当前账号。`,
+                'warn'
+              );
               await addLog(`第 ${targetRun}/${totalRuns} 轮没有 Plus 免费试用资格，本轮将直接失败并跳过剩余重试。`, 'warn');
               await addLog(
                 targetRun < totalRuns
@@ -1079,21 +1040,7 @@
               await appendRoundRecordIfNeeded('failed', reason, err);
               cancelPendingCommands('当前轮因 GPC 任务已结束。');
               await broadcastStopToContentScripts();
-              if (!autoRunSkipFailures) {
-                await addLog(
-                  `第 ${targetRun}/${totalRuns} 轮 GPC 任务已结束，自动重试未开启，当前自动运行将停止。`,
-                  'warn'
-                );
-                stoppedEarly = true;
-                await broadcastAutoRunStatus('stopped', {
-                  currentRun: targetRun,
-                  totalRuns,
-                  attemptRun,
-                  sessionId: 0,
-                });
-                break;
-              }
-
+              await addLog(`第 ${targetRun}/${totalRuns} 轮 GPC 任务已结束，将放弃当前任务。`, 'warn');
               await addLog(`第 ${targetRun}/${totalRuns} 轮 GPC 任务已结束，本轮将直接失败并跳过剩余重试。`, 'warn');
               await addLog(
                 targetRun < totalRuns
@@ -1118,80 +1065,9 @@
                   : '当前轮因 PayPal Checkout genericError 已终止，等待用户选择检查或重试。'
               );
               await broadcastStopToContentScripts();
-              await addLog(
-                autoRunRetryPaypalCallback
-                  ? `第 ${targetRun}/${totalRuns} 轮检测到 PayPal Checkout genericError，已达到 PAYPAL回调自动重试上限，当前自动运行将停止。`
-                  : `第 ${targetRun}/${totalRuns} 轮检测到 PayPal Checkout genericError，当前自动运行已停止，请在弹窗中选择“检查”或“重试”。`,
-                'warn'
-              );
-              stoppedEarly = true;
-              await broadcastAutoRunStatus('stopped', {
-                currentRun: targetRun,
-                totalRuns,
-                attemptRun,
-                sessionId: 0,
-              });
-              break;
-            }
-
-            if (blockedByHostedCheckoutVerificationResendLimit) {
-              roundSummary.status = 'failed';
-              roundSummary.finalFailureReason = reason;
-              await setState({
-                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
-              });
-              await appendRoundRecordIfNeeded('failed', reason, err);
-              cancelPendingCommands('当前轮因 PayPal 验证码自动 Resend 达到上限已终止。');
-              await broadcastStopToContentScripts();
-              await addLog(
-                `第 ${targetRun}/${totalRuns} 轮 PayPal 验证码自动 Resend 已达到上限，当前自动运行已停止；请尝试在页面手动获取验证码并填入。`,
-                'warn'
-              );
-              stoppedEarly = true;
-              await broadcastAutoRunStatus('stopped', {
-                currentRun: targetRun,
-                totalRuns,
-                attemptRun,
-                sessionId: 0,
-              });
-              break;
-            }
-
-            if (blockedByCloudCheckoutAlreadyPaid) {
-              roundSummary.status = 'failed';
-              roundSummary.finalFailureReason = reason;
-              await setState({
-                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
-              });
-              await appendRoundRecordIfNeeded('failed', reason, err);
-              cancelPendingCommands('当前轮因云端确认账号已开通 Plus，已停止自动重试。');
-              await broadcastStopToContentScripts();
-              await addLog(
-                `第 ${targetRun}/${totalRuns} 轮云端返回 User is already paid，当前自动运行已停止，请检查 PLUS 是否已经开通。`,
-                'warn'
-              );
-              stoppedEarly = true;
-              await broadcastAutoRunStatus('stopped', {
-                currentRun: targetRun,
-                totalRuns,
-                attemptRun,
-                sessionId: 0,
-              });
-              break;
-            }
-
-            if (blockedBySignupUserAlreadyExists) {
-              roundSummary.status = 'failed';
-              roundSummary.finalFailureReason = reason;
-              await setState({
-                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
-              });
-              await appendRoundRecordIfNeeded('failed', reason, err);
-              cancelPendingCommands('当前轮因 user_already_exists 已终止。');
-              await broadcastStopToContentScripts();
-              if (!autoRunSkipFailures) {
+              if (!autoRunRetryPaypalCallback) {
                 await addLog(
-                  `第 ${targetRun}/${totalRuns} 轮触发 user_already_exists/用户已存在，自动重试未开启，当前自动运行将停止。`,
+                  `第 ${targetRun}/${totalRuns} 轮检测到 PayPal Checkout genericError，当前自动运行已停止，请在弹窗中选择“检查”或“重试”。`,
                   'warn'
                 );
                 stoppedEarly = true;
@@ -1204,6 +1080,70 @@
                 break;
               }
 
+              await addLog(
+                `第 ${targetRun}/${totalRuns} 轮检测到 PayPal Checkout genericError，已达到 PAYPAL回调自动重试上限，本轮将直接失败并跳过剩余重试。`,
+                'warn'
+              );
+              await addLog(
+                targetRun < totalRuns
+                  ? `第 ${targetRun}/${totalRuns} 轮因 PayPal Checkout genericError 提前结束，自动流程将继续下一轮。`
+                  : `第 ${targetRun}/${totalRuns} 轮因 PayPal Checkout genericError 提前结束，已无后续轮次，本次自动运行结束。`,
+                'warn'
+              );
+              forceFreshTabsNextRun = true;
+              break;
+            }
+
+            if (blockedByHostedCheckoutVerificationResendLimit) {
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = reason;
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
+              await appendRoundRecordIfNeeded('failed', reason, err);
+              cancelPendingCommands('当前轮因 PayPal 验证码自动 Resend 达到上限已终止。');
+              await broadcastStopToContentScripts();
+              await addLog(`第 ${targetRun}/${totalRuns} 轮 PayPal 验证码自动 Resend 已达到上限，本轮将直接失败并跳过剩余重试。`, 'warn');
+              await addLog(
+                targetRun < totalRuns
+                  ? `第 ${targetRun}/${totalRuns} 轮因 PayPal 验证码 Resend 上限提前结束，自动流程将继续下一轮。`
+                  : `第 ${targetRun}/${totalRuns} 轮因 PayPal 验证码 Resend 上限提前结束，已无后续轮次，本次自动运行结束。`,
+                'warn'
+              );
+              forceFreshTabsNextRun = true;
+              break;
+            }
+
+            if (blockedByCloudCheckoutAlreadyPaid) {
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = reason;
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
+              await appendRoundRecordIfNeeded('failed', reason, err);
+              cancelPendingCommands('当前轮因云端确认账号已开通 Plus 已终止。');
+              await broadcastStopToContentScripts();
+              await addLog(`第 ${targetRun}/${totalRuns} 轮云端返回 User is already paid，本轮将直接失败并跳过剩余重试。`, 'warn');
+              await addLog(
+                targetRun < totalRuns
+                  ? `第 ${targetRun}/${totalRuns} 轮因账号已开通 Plus 提前结束，自动流程将继续下一轮。`
+                  : `第 ${targetRun}/${totalRuns} 轮因账号已开通 Plus 提前结束，已无后续轮次，本次自动运行结束。`,
+                'warn'
+              );
+              forceFreshTabsNextRun = true;
+              break;
+            }
+
+            if (blockedBySignupUserAlreadyExists) {
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = reason;
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
+              await appendRoundRecordIfNeeded('failed', reason, err);
+              cancelPendingCommands('当前轮因 user_already_exists 已终止。');
+              await broadcastStopToContentScripts();
+              await addLog(`第 ${targetRun}/${totalRuns} 轮触发 user_already_exists/用户已存在，将放弃当前邮箱。`, 'warn');
               await addLog(`第 ${targetRun}/${totalRuns} 轮触发 user_already_exists/用户已存在，本轮将直接失败并跳过剩余重试。`, 'warn');
               await addLog(
                 targetRun < totalRuns
@@ -1224,21 +1164,7 @@
               await appendRoundRecordIfNeeded('failed', reason, err);
               cancelPendingCommands('当前轮因步骤 4 连续 405 错误已终止。');
               await broadcastStopToContentScripts();
-              if (!autoRunSkipFailures) {
-                await addLog(
-                  `第 ${targetRun}/${totalRuns} 轮步骤 4 连续 405 恢复失败，自动重试未开启，当前自动运行将停止。`,
-                  'warn'
-                );
-                stoppedEarly = true;
-                await broadcastAutoRunStatus('stopped', {
-                  currentRun: targetRun,
-                  totalRuns,
-                  attemptRun,
-                  sessionId: 0,
-                });
-                break;
-              }
-
+              await addLog(`第 ${targetRun}/${totalRuns} 轮步骤 4 连续 405 恢复失败，将放弃当前账号。`, 'warn');
               await addLog(`第 ${targetRun}/${totalRuns} 轮步骤 4 连续 405 恢复失败，本轮将直接失败并跳过剩余重试。`, 'warn');
               await addLog(
                 targetRun < totalRuns

@@ -98,6 +98,34 @@ test('manual hosted checkout code fetch ignores PayPal confirmation text with ex
   );
 });
 
+test('manual hosted checkout code fetch times out stalled sms endpoint', async () => {
+  let aborted = false;
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    fetch: async (_url, options = {}) => {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 120);
+        options.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          aborted = true;
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        }, { once: true });
+      });
+      return {
+        text: async () => '',
+      };
+    },
+  });
+
+  await assert.rejects(
+    () => executor.fetchHostedCheckoutVerificationCodeManually({
+      verificationUrl: 'http://example.test/api/get_sms?key=test',
+      timeoutMs: 10,
+    }),
+    /验证码接口请求超时/
+  );
+  assert.equal(aborted, true);
+});
+
 test('hosted checkout sms pool accepts phone pipe url entries', async () => {
   const patches = [];
   let requestedUrl = '';
