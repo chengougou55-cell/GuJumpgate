@@ -285,7 +285,15 @@
             afterTimestamp: pollPayload.filterAfterTimestamp || 0,
             senderFilters: pollPayload.senderFilters || [],
             subjectFilters: pollPayload.subjectFilters || [],
+            requiredKeywords: pollPayload.requiredKeywords || [],
+            requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
+            codePatterns: pollPayload.codePatterns || [],
             excludeCodes: pollPayload.excludeCodes || [],
+            preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
+            preferredKeywords: pollPayload.preferredKeywords || [],
+            excludedSenderFilters: pollPayload.excludedSenderFilters || [],
+            excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
+            excludedKeywords: pollPayload.excludedKeywords || [],
           });
           const match = matchResult.match;
           if (match?.code) {

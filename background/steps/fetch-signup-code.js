@@ -2,6 +2,7 @@
   root.MultiPageBackgroundStep4 = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundStep4Module() {
   const MAIL_2925_FILTER_LOOKBACK_MS = 10 * 60 * 1000;
+  const MAIL_VERIFICATION_FILTER_LOOKBACK_MS = 15 * 1000;
 
   function createStep4Executor(deps = {}) {
     const {
@@ -102,9 +103,11 @@
       const mail = getMailConfig(state);
       if (mail.error) throw new Error(mail.error);
 
+      const requestedAt = Number(state?.signupVerificationRequestedAt) || 0;
+      const baseFilterAfterTimestamp = requestedAt || stepStartedAt;
       const verificationFilterAfterTimestamp = mail.provider === '2925'
-        ? Math.max(0, stepStartedAt - MAIL_2925_FILTER_LOOKBACK_MS)
-        : stepStartedAt;
+        ? Math.max(0, baseFilterAfterTimestamp - MAIL_2925_FILTER_LOOKBACK_MS)
+        : Math.max(0, baseFilterAfterTimestamp - MAIL_VERIFICATION_FILTER_LOOKBACK_MS);
 
       if (mail.source === 'icloud-mail' && typeof ensureIcloudMailSession === 'function') {
         await addLog('步骤 4：正在确认 iCloud 邮箱登录态...', 'info');

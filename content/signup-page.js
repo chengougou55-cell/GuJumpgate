@@ -1345,6 +1345,7 @@ async function fillSignupEmailAndContinue(email, step) {
   }
 
   log(`步骤 ${step}：邮箱已准备提交，正在前往密码页...`);
+  const submittedAt = Date.now();
   window.setTimeout(async () => {
     try {
       throwIfStopped();
@@ -1360,6 +1361,7 @@ async function fillSignupEmailAndContinue(email, step) {
 
   return {
     submitted: true,
+    submittedAt,
     email,
     url: location.href,
   };

@@ -180,11 +180,20 @@
     const senderFilters = (filters.senderFilters || []).map(normalizeText).filter(Boolean);
     const subjectFilters = (filters.subjectFilters || []).map(normalizeText).filter(Boolean);
     const requiredKeywords = (filters.requiredKeywords || []).map(normalizeText).filter(Boolean);
+    const requiredAnyKeywords = (filters.requiredAnyKeywords || []).map(normalizeText).filter(Boolean);
+    const preferredSubjectFilters = (filters.preferredSubjectFilters || []).map(normalizeText).filter(Boolean);
+    const preferredKeywords = (filters.preferredKeywords || []).map(normalizeText).filter(Boolean);
+    const excludedSenderFilters = (filters.excludedSenderFilters || []).map(normalizeText).filter(Boolean);
+    const excludedSubjectFilters = (filters.excludedSubjectFilters || []).map(normalizeText).filter(Boolean);
+    const excludedKeywords = (filters.excludedKeywords || []).map(normalizeText).filter(Boolean);
     const hasSenderFilters = senderFilters.length > 0;
     const hasSubjectFilters = subjectFilters.length > 0;
     const hasKeywordHints = requiredKeywords.length > 0;
     const afterTimestamp = normalizeTimestamp(filters.afterTimestamp);
     const receivedAt = normalizeTimestamp(message?.receivedDateTime);
+    if (afterTimestamp && filters.requireReceivedTimestamp && !receivedAt) {
+      return null;
+    }
     if (afterTimestamp && receivedAt && receivedAt < afterTimestamp) {
       return null;
     }
@@ -193,6 +202,18 @@
     const subject = normalizeText(message?.subject);
     const preview = String(message?.bodyPreview || '');
     const combinedText = [subject, sender, preview].filter(Boolean).join(' ');
+    const normalizedPreview = normalizeText(preview);
+    const normalizedCombinedText = normalizeText(combinedText);
+    if (requiredAnyKeywords.length && !requiredAnyKeywords.some((item) => normalizedCombinedText.includes(item))) {
+      return null;
+    }
+    const excludedSenderMatch = excludedSenderFilters.some((item) => sender.includes(item) || normalizedPreview.includes(item));
+    const excludedSubjectMatch = excludedSubjectFilters.some((item) => subject.includes(item) || normalizedPreview.includes(item));
+    const excludedKeywordMatch = excludedKeywords.some((item) => normalizedCombinedText.includes(item));
+    if (excludedSenderMatch || excludedSubjectMatch || excludedKeywordMatch) {
+      return null;
+    }
+
     const code = extractVerificationCode(combinedText, {
       codePatterns: filters.codePatterns,
     });
@@ -205,10 +226,10 @@
       ? senderFilters.some((item) => sender.includes(item) || normalizeText(preview).includes(item))
       : false;
     const subjectMatch = hasSubjectFilters
-      ? subjectFilters.some((item) => subject.includes(item) || normalizeText(preview).includes(item))
+      ? subjectFilters.some((item) => subject.includes(item) || normalizedPreview.includes(item))
       : false;
     const keywordMatch = hasKeywordHints
-      ? requiredKeywords.some((item) => normalizeText(combinedText).includes(item))
+      ? requiredKeywords.some((item) => normalizedCombinedText.includes(item))
       : false;
 
     if ((hasSenderFilters || hasSubjectFilters || hasKeywordHints) && !senderMatch && !subjectMatch && !keywordMatch) {
@@ -218,11 +239,17 @@
     if (!code) {
       return null;
     }
+    const preferredScore = (
+      preferredSubjectFilters.some((item) => subject.includes(item) || normalizedPreview.includes(item)) ? 2 : 0
+    ) + (
+      preferredKeywords.some((item) => normalizedCombinedText.includes(item)) ? 1 : 0
+    );
 
     return {
       code,
       message,
       receivedAt,
+      preferredScore,
     };
   }
 
@@ -230,7 +257,12 @@
     const matches = (Array.isArray(messages) ? messages : [])
       .map((message) => messageMatchesFilters(message, filters))
       .filter(Boolean)
-      .sort((left, right) => right.receivedAt - left.receivedAt);
+      .sort((left, right) => {
+        if (left.preferredScore !== right.preferredScore) {
+          return right.preferredScore - left.preferredScore;
+        }
+        return right.receivedAt - left.receivedAt;
+      });
 
     return matches[0] || null;
   }
@@ -249,12 +281,28 @@
     if (strictOrRelaxedResult.match) {
       return strictOrRelaxedResult;
     }
+    if (filters.disableTimeFallback) {
+      return {
+        match: null,
+        usedRelaxedFilters: false,
+        usedTimeFallback: false,
+      };
+    }
 
     const timeFallbackMatch = pickVerificationMessage(messages, {
       afterTimestamp: 0,
       excludeCodes: filters.excludeCodes,
       senderFilters: filters.senderFilters,
       subjectFilters: filters.subjectFilters,
+      requiredKeywords: filters.requiredKeywords,
+      requiredAnyKeywords: filters.requiredAnyKeywords,
+      codePatterns: filters.codePatterns,
+      preferredSubjectFilters: filters.preferredSubjectFilters,
+      preferredKeywords: filters.preferredKeywords,
+      excludedSenderFilters: filters.excludedSenderFilters,
+      excludedSubjectFilters: filters.excludedSubjectFilters,
+      excludedKeywords: filters.excludedKeywords,
+      requireReceivedTimestamp: filters.requireReceivedTimestamp,
     });
 
     return {

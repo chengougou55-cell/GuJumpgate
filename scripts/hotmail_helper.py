@@ -802,14 +802,38 @@ def extract_code(text, code_patterns=None):
     return ""
 
 
-def select_latest_code(messages, sender_filters, subject_filters, exclude_codes, filter_after_timestamp, required_keywords=None, code_patterns=None):
+def select_latest_code(
+    messages,
+    sender_filters,
+    subject_filters,
+    exclude_codes,
+    filter_after_timestamp,
+    required_keywords=None,
+    required_any_keywords=None,
+    code_patterns=None,
+    preferred_subject_filters=None,
+    preferred_keywords=None,
+    excluded_sender_filters=None,
+    excluded_subject_filters=None,
+    excluded_keywords=None,
+    disable_time_fallback=False,
+    require_received_timestamp=False,
+):
     sender_keywords = [str(item).strip().lower() for item in sender_filters or [] if str(item).strip()]
     subject_keywords = [str(item).strip().lower() for item in subject_filters or [] if str(item).strip()]
     required_keyword_hints = [str(item).strip().lower() for item in required_keywords or [] if str(item).strip()]
+    required_any_keyword_hints = [str(item).strip().lower() for item in required_any_keywords or [] if str(item).strip()]
+    preferred_subject_keywords = [str(item).strip().lower() for item in preferred_subject_filters or [] if str(item).strip()]
+    preferred_keyword_hints = [str(item).strip().lower() for item in preferred_keywords or [] if str(item).strip()]
+    excluded_sender_keywords = [str(item).strip().lower() for item in excluded_sender_filters or [] if str(item).strip()]
+    excluded_subject_keywords = [str(item).strip().lower() for item in excluded_subject_filters or [] if str(item).strip()]
+    excluded_keyword_hints = [str(item).strip().lower() for item in excluded_keywords or [] if str(item).strip()]
     excluded = {str(item).strip() for item in exclude_codes or [] if str(item).strip()}
 
     def match_message(message, apply_time_filter):
         timestamp = int(message.get("receivedTimestamp") or 0)
+        if apply_time_filter and filter_after_timestamp and require_received_timestamp and not timestamp:
+            return None
         if apply_time_filter and filter_after_timestamp and timestamp and timestamp < int(filter_after_timestamp):
             return None
 
@@ -817,6 +841,14 @@ def select_latest_code(messages, sender_filters, subject_filters, exclude_codes,
         subject = str(message.get("subject", ""))
         preview = str(message.get("bodyPreview", ""))
         combined = " ".join([sender, subject.lower(), preview.lower()])
+        if required_any_keyword_hints and not any(keyword in combined for keyword in required_any_keyword_hints):
+            return None
+        if any(keyword in sender or keyword in preview.lower() for keyword in excluded_sender_keywords):
+            return None
+        if any(keyword in subject.lower() or keyword in preview.lower() for keyword in excluded_subject_keywords):
+            return None
+        if any(keyword in combined for keyword in excluded_keyword_hints):
+            return None
         code = extract_code(" ".join([subject, preview, sender]), code_patterns=code_patterns)
         if not code:
             body_content = get_message_body_content(message)
@@ -831,16 +863,28 @@ def select_latest_code(messages, sender_filters, subject_filters, exclude_codes,
         if (sender_keywords or subject_keywords or required_keyword_hints) and not sender_ok and not subject_ok and not keyword_ok:
             return None
 
-        return {"code": code, "message": message}
+        preferred_score = (
+            2 if any(keyword in subject.lower() or keyword in preview.lower() for keyword in preferred_subject_keywords) else 0
+        ) + (
+            1 if any(keyword in combined for keyword in preferred_keyword_hints) else 0
+        )
+        return {"code": code, "message": message, "preferredScore": preferred_score}
 
-    for use_time_fallback in [False, True]:
+    fallback_modes = [False] if disable_time_fallback else [False, True]
+    for use_time_fallback in fallback_modes:
         matched = []
         for message in messages:
             result = match_message(message, apply_time_filter=not use_time_fallback)
             if result:
                 matched.append(result)
         if matched:
-            matched.sort(key=lambda item: int(item["message"].get("receivedTimestamp") or 0), reverse=True)
+            matched.sort(
+                key=lambda item: (
+                    int(item.get("preferredScore") or 0),
+                    int(item["message"].get("receivedTimestamp") or 0),
+                ),
+                reverse=True,
+            )
             best = matched[0]
             return {
                 "code": best["code"],
@@ -927,7 +971,15 @@ class HotmailHelperHandler(BaseHTTPRequestHandler):
                     payload.get("excludeCodes") or [],
                     int(payload.get("filterAfterTimestamp") or 0),
                     payload.get("requiredKeywords") or [],
+                    payload.get("requiredAnyKeywords") or [],
                     payload.get("codePatterns") or [],
+                    payload.get("preferredSubjectFilters") or [],
+                    payload.get("preferredKeywords") or [],
+                    payload.get("excludedSenderFilters") or [],
+                    payload.get("excludedSubjectFilters") or [],
+                    payload.get("excludedKeywords") or [],
+                    bool(payload.get("disableTimeFallback")),
+                    bool(payload.get("requireReceivedTimestamp")),
                 )
                 json_response(self, 200, {
                     "ok": True,

@@ -493,6 +493,9 @@
         nextSignupState: landingResult?.state || 'password_page',
         nextSignupUrl: landingResult?.url || step2Result?.url || '',
         skippedPasswordStep: landingResult?.state === 'verification_page',
+        signupVerificationRequestedAt: landingResult?.state === 'verification_page'
+          ? (Number(step2Result?.submittedAt) || Date.now())
+          : null,
       });
     }
 

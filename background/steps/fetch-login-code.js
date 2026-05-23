@@ -2,6 +2,7 @@
   root.MultiPageBackgroundStep8 = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundStep8Module() {
   const MAIL_2925_FILTER_LOOKBACK_MS = 10 * 60 * 1000;
+  const MAIL_VERIFICATION_FILTER_LOOKBACK_MS = 15 * 1000;
 
   function createStep8Executor(deps = {}) {
     const {
@@ -560,9 +561,11 @@
       const mail = getMailConfig(preparedState);
       if (mail.error) throw new Error(mail.error);
       const stepStartedAt = Date.now();
+      const requestedAt = latestResendAt || Number(preparedState?.loginVerificationRequestedAt) || 0;
+      const baseFilterAfterTimestamp = requestedAt || stepStartedAt;
       const verificationFilterAfterTimestamp = mail.provider === '2925'
-        ? Math.max(0, stepStartedAt - MAIL_2925_FILTER_LOOKBACK_MS)
-        : stepStartedAt;
+        ? Math.max(0, baseFilterAfterTimestamp - MAIL_2925_FILTER_LOOKBACK_MS)
+        : Math.max(0, baseFilterAfterTimestamp - MAIL_VERIFICATION_FILTER_LOOKBACK_MS);
       const verificationSessionKey = `${visibleStep}:${stepStartedAt}`;
       const shouldCompareVerificationEmail = mail.provider !== '2925';
       const displayedVerificationEmail = shouldCompareVerificationEmail

@@ -7,6 +7,14 @@
   const LOGIN_CODE_NODE_ID = 'fetch-login-code';
   const OPENAI_CODE_PATTERNS = Object.freeze([
     Object.freeze({
+      source: '输入此临时(?:验证码|代码)以继续[^0-9]{0,80}(\\d{6})',
+      flags: 'i',
+    }),
+    Object.freeze({
+      source: '临时(?:验证码|代码)[^0-9]{0,80}(\\d{6})',
+      flags: 'i',
+    }),
+    Object.freeze({
       source: '(?:chatgpt\\s+log-?in\\s+code|enter\\s+this\\s+code)[^0-9]{0,24}(\\d{6})',
       flags: 'i',
     }),
@@ -96,12 +104,21 @@
         requiredKeywords: signupStep
           ? OPENAI_REQUIRED_KEYWORDS
           : [...OPENAI_REQUIRED_KEYWORDS, 'login'],
+        requiredAnyKeywords: ['openai', 'chatgpt'],
         senderFilters: signupStep
           ? ['openai', 'noreply', 'verify', 'auth', 'duckduckgo', 'forward']
           : ['openai', 'noreply', 'verify', 'auth', 'chatgpt', 'duckduckgo', 'forward'],
         subjectFilters: signupStep
           ? ['verify', 'verification', 'code', '验证码', 'confirm']
           : ['verify', 'verification', 'code', '验证码', 'confirm', 'login'],
+        preferredSubjectFilters: signupStep
+          ? ['临时验证码', 'verification code']
+          : ['登录代码', 'login code', 'log-in code'],
+        preferredKeywords: signupStep
+          ? ['输入此临时验证码以继续', 'temporary verification code']
+          : ['login code', 'log-in code'],
+        excludedSubjectFilters: [],
+        excludedKeywords: [],
         targetEmail,
         targetEmailHints: buildTargetEmailHints(targetEmail),
         mail2925MatchTargetEmail: shouldMatchMail2925TargetEmail(state),

@@ -16,6 +16,7 @@
       normalizeOutlookEmailAccounts,
       normalizeOutlookEmailAddress,
       normalizeOutlookEmailBaseUrl,
+      normalizeOutlookEmailMailApiDetail,
       normalizeOutlookEmailMailApiMessages,
       persistRegistrationEmailState = null,
       pickVerificationMessageWithTimeFallback,
@@ -239,6 +240,76 @@
       return { config, messages, payload };
     }
 
+    async function getOutlookEmailMessageDetail(state, options = {}) {
+      const latestState = state || await getState();
+      const config = ensureOutlookEmailConfig(latestState);
+      const address = normalizeOutlookEmailReceiveMailbox(options.address);
+      const messageId = String(options.messageId || '').trim();
+      if (!address || !messageId) {
+        return { config, message: null, payload: null };
+      }
+      const payload = await requestOutlookEmailJson(
+        config,
+        `/api/external/email/${encodeURIComponent(address)}/${encodeURIComponent(messageId)}`,
+        {
+          method: 'GET',
+          searchParams: {
+            folder: options.folder || '',
+            method: options.method || '',
+          },
+          timeoutMs: options.timeoutMs || 15000,
+        }
+      );
+      const normalized = typeof normalizeOutlookEmailMailApiDetail === 'function'
+        ? normalizeOutlookEmailMailApiDetail(payload, options.folder || '')
+        : null;
+      const base = options.baseMessage || {};
+      const message = normalized
+        ? {
+          ...base,
+          ...normalized,
+          id: normalized.id || base.id,
+          folder: normalized.folder || base.folder,
+          mailbox: normalized.mailbox || base.mailbox,
+          receivedDateTime: normalized.receivedDateTime || base.receivedDateTime,
+        }
+        : null;
+      return { config, message, payload };
+    }
+
+    async function fetchOutlookEmailMessageDetails(state, messages = [], options = {}) {
+      const details = [];
+      const limit = Math.max(0, Math.min(10, Number(options.limit) || 0));
+      const candidates = (messages || [])
+        .slice()
+        .sort((left, right) => {
+          const leftTime = Date.parse(left?.receivedDateTime || '') || 0;
+          const rightTime = Date.parse(right?.receivedDateTime || '') || 0;
+          return rightTime - leftTime;
+        })
+        .slice(0, limit);
+      for (const message of candidates) {
+        throwIfStopped();
+        if (!message?.id) continue;
+        try {
+          const { message: detailMessage } = await getOutlookEmailMessageDetail(state, {
+            address: options.address,
+            messageId: message.id,
+            folder: message.folder || options.folder || '',
+            method: message.idMode || message.raw?.id_mode || '',
+            baseMessage: message,
+            timeoutMs: options.timeoutMs || 15000,
+          });
+          if (detailMessage) {
+            details.push(detailMessage);
+          }
+        } catch (err) {
+          await addLog(`步骤 ${options.step || ''}：outlookEmail 邮件详情读取失败：${err.message}`.replace(/^步骤\s+：/, 'outlookEmail：'), 'warn');
+        }
+      }
+      return details;
+    }
+
     function summarizeOutlookEmailMessagesForLog(messages) {
       return (messages || [])
         .slice()
@@ -288,15 +359,53 @@
             }
           }
 
-          const matchResult = pickVerificationMessageWithTimeFallback(results, {
+          let matchResult = pickVerificationMessageWithTimeFallback(results, {
             afterTimestamp: pollPayload.filterAfterTimestamp || 0,
             senderFilters: pollPayload.senderFilters || [],
             subjectFilters: pollPayload.subjectFilters || [],
             requiredKeywords: pollPayload.requiredKeywords || [],
+            requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
             codePatterns: pollPayload.codePatterns || [],
             excludeCodes: pollPayload.excludeCodes || [],
+            preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
+            preferredKeywords: pollPayload.preferredKeywords || [],
+            excludedSenderFilters: pollPayload.excludedSenderFilters || [],
+            excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
+            excludedKeywords: pollPayload.excludedKeywords || [],
+            disableTimeFallback: true,
+            requireReceivedTimestamp: true,
           });
-          const match = matchResult.match;
+          let match = matchResult.match;
+          if (!match?.code) {
+            const detailMessages = await fetchOutlookEmailMessageDetails(latestState, results, {
+              address: targetEmail,
+              limit: pollPayload.detailLimit || 10,
+              step,
+            });
+            if (detailMessages.length) {
+              const detailMatchResult = pickVerificationMessageWithTimeFallback(detailMessages, {
+                afterTimestamp: pollPayload.filterAfterTimestamp || 0,
+                senderFilters: pollPayload.senderFilters || [],
+                subjectFilters: pollPayload.subjectFilters || [],
+                requiredKeywords: pollPayload.requiredKeywords || [],
+                requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
+                codePatterns: pollPayload.codePatterns || [],
+                excludeCodes: pollPayload.excludeCodes || [],
+                preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
+                preferredKeywords: pollPayload.preferredKeywords || [],
+                excludedSenderFilters: pollPayload.excludedSenderFilters || [],
+                excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
+                excludedKeywords: pollPayload.excludedKeywords || [],
+                disableTimeFallback: true,
+                requireReceivedTimestamp: true,
+              });
+              if (detailMatchResult.match?.code) {
+                matchResult = detailMatchResult;
+                match = detailMatchResult.match;
+                await addLog(`步骤 ${step}：列表邮件未命中，已通过 outlookEmail 邮件详情找到验证码。`, 'warn');
+              }
+            }
+          }
           if (match?.code) {
             if (matchResult.usedRelaxedFilters) {
               const fallbackLabel = matchResult.usedTimeFallback ? '宽松匹配 + 时间回退' : '宽松匹配';
@@ -332,6 +441,8 @@
       ensureOutlookEmailConfig,
       fetchOutlookEmailAddress,
       getOutlookEmailConfig,
+      getOutlookEmailMessageDetail,
+      fetchOutlookEmailMessageDetails,
       listOutlookEmailAccounts,
       listOutlookEmailMessages,
       normalizeOutlookEmailReceiveMailbox,

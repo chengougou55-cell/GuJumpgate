@@ -156,6 +156,25 @@
     return [];
   }
 
+  function getOutlookEmailDetailRow(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    const candidates = [
+      payload.email,
+      payload.message,
+      payload.item,
+      payload.data,
+      payload?.data?.email,
+      payload?.data?.message,
+      payload?.data?.item,
+    ];
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        return candidate;
+      }
+    }
+    return payload;
+  }
+
   function normalizeOutlookEmailReceivedDateTime(value) {
     if (!value && value !== 0) return '';
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -179,12 +198,14 @@
     if (!row || typeof row !== 'object') return null;
 
     const fromAddress = firstNonEmptyString([
-      row.from,
-      row.sender,
-      row.from_email,
-      row.sender_email,
       row?.from?.emailAddress?.address,
       row?.from?.EmailAddress?.Address,
+      row?.sender?.emailAddress?.address,
+      row?.sender?.EmailAddress?.Address,
+      row.from_email,
+      row.sender_email,
+      row.from,
+      row.sender,
     ]);
     const htmlContent = firstNonEmptyString([row.html, row.body_html, row.bodyHtml]);
     const textContent = firstNonEmptyString([
@@ -195,6 +216,8 @@
       row.plainText,
       row.content_text,
       row.body,
+      row.body_content,
+      row.bodyContent,
       row.content,
     ]);
     const bodyPreview = stripHtmlTags(textContent || htmlContent);
@@ -202,6 +225,7 @@
 
     return {
       id: firstNonEmptyString([row.id, row.message_id, row.messageId, row.internetMessageId]),
+      idMode: firstNonEmptyString([row.id_mode, row.idMode, row.method]),
       address: normalizeOutlookEmailAddress(firstNonEmptyString([row.to, row.email, row.recipient])),
       subject: firstNonEmptyString([row.subject, row.title]),
       from: {
@@ -230,6 +254,11 @@
       .filter(Boolean);
   }
 
+  function normalizeOutlookEmailMailApiDetail(payload, fallbackFolder = '') {
+    const row = getOutlookEmailDetailRow(payload);
+    return row ? normalizeOutlookEmailMessage(row, fallbackFolder) : null;
+  }
+
   return {
     DEFAULT_API_KEY,
     DEFAULT_BASE_URL,
@@ -241,6 +270,7 @@
     normalizeOutlookEmailAddress,
     normalizeOutlookEmailBaseUrl,
     normalizeOutlookEmailMailApiMessages,
+    normalizeOutlookEmailMailApiDetail,
     normalizeOutlookEmailMessage,
     normalizeOutlookEmailReceivedDateTime,
   };

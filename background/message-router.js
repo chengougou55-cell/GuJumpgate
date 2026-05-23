@@ -808,6 +808,9 @@
         }
         case 2:
           await syncStepAccountIdentityFromPayload(payload);
+          if (payload.signupVerificationRequestedAt) {
+            await setState({ signupVerificationRequestedAt: payload.signupVerificationRequestedAt });
+          }
           if (payload.skipRegistrationFlow) {
             const latestState = await getState();
             for (const skippedStep of [3, 4, 5]) {

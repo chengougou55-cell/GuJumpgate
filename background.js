@@ -329,6 +329,7 @@ const {
   normalizeOutlookEmailAccounts,
   normalizeOutlookEmailAddress,
   normalizeOutlookEmailBaseUrl,
+  normalizeOutlookEmailMailApiDetail,
   normalizeOutlookEmailMailApiMessages,
 } = self.OutlookEmailUtils;
 const {
@@ -2915,6 +2916,7 @@ const outlookEmailProvider = self.MultiPageBackgroundOutlookEmailProvider.create
   normalizeOutlookEmailAccounts,
   normalizeOutlookEmailAddress,
   normalizeOutlookEmailBaseUrl,
+  normalizeOutlookEmailMailApiDetail,
   normalizeOutlookEmailMailApiMessages,
   persistRegistrationEmailState,
   pickVerificationMessageWithTimeFallback,
@@ -5342,8 +5344,16 @@ async function requestHotmailLocalCode(account, pollPayload = {}) {
         senderFilters: pollPayload.senderFilters || [],
         subjectFilters: pollPayload.subjectFilters || [],
         requiredKeywords: pollPayload.requiredKeywords || [],
+        requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
         codePatterns: pollPayload.codePatterns || [],
         excludeCodes: pollPayload.excludeCodes || [],
+        preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
+        preferredKeywords: pollPayload.preferredKeywords || [],
+        excludedSenderFilters: pollPayload.excludedSenderFilters || [],
+        excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
+        excludedKeywords: pollPayload.excludedKeywords || [],
+        disableTimeFallback: Boolean(pollPayload.disableTimeFallback),
+        requireReceivedTimestamp: Boolean(pollPayload.requireReceivedTimestamp),
         filterAfterTimestamp: Number(pollPayload.filterAfterTimestamp || 0) || 0,
       }),
       signal: controller.signal,
@@ -5621,8 +5631,14 @@ async function pollHotmailVerificationCode(step, state, pollPayload = {}) {
         senderFilters: pollPayload.senderFilters || [],
         subjectFilters: pollPayload.subjectFilters || [],
         requiredKeywords: pollPayload.requiredKeywords || [],
+        requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
         codePatterns: pollPayload.codePatterns || [],
         excludeCodes: pollPayload.excludeCodes || [],
+        preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
+        preferredKeywords: pollPayload.preferredKeywords || [],
+        excludedSenderFilters: pollPayload.excludedSenderFilters || [],
+        excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
+        excludedKeywords: pollPayload.excludedKeywords || [],
       });
       const match = matchResult.match;
 
@@ -6923,8 +6939,14 @@ async function pollCloudflareTempEmailVerificationCode(step, state, pollPayload 
         senderFilters: pollPayload.senderFilters || [],
         subjectFilters: pollPayload.subjectFilters || [],
         requiredKeywords: pollPayload.requiredKeywords || [],
+        requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
         codePatterns: pollPayload.codePatterns || [],
         excludeCodes: pollPayload.excludeCodes || [],
+        preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
+        preferredKeywords: pollPayload.preferredKeywords || [],
+        excludedSenderFilters: pollPayload.excludedSenderFilters || [],
+        excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
+        excludedKeywords: pollPayload.excludedKeywords || [],
       });
       let match = matchResult.match;
 
@@ -6938,8 +6960,14 @@ async function pollCloudflareTempEmailVerificationCode(step, state, pollPayload 
             senderFilters: pollPayload.senderFilters || [],
             subjectFilters: pollPayload.subjectFilters || [],
             requiredKeywords: pollPayload.requiredKeywords || [],
+            requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
             codePatterns: pollPayload.codePatterns || [],
             excludeCodes: pollPayload.excludeCodes || [],
+            preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
+            preferredKeywords: pollPayload.preferredKeywords || [],
+            excludedSenderFilters: pollPayload.excludedSenderFilters || [],
+            excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
+            excludedKeywords: pollPayload.excludedKeywords || [],
           });
           if (detailMatchResult.match?.code) {
             matchResult = detailMatchResult;
@@ -10901,6 +10929,9 @@ async function handleStepData(step, payload) {
     }
     case 2:
       await persistStepEmailPayload(payload.email, payload, 'step2_identity');
+      if (payload.signupVerificationRequestedAt) {
+        await setState({ signupVerificationRequestedAt: payload.signupVerificationRequestedAt });
+      }
       if (!payload.email && (payload.accountIdentifierType || payload.accountIdentifier || payload.signupPhoneNumber || payload.signupPhoneActivation)) {
         await setState({
           accountIdentifierType: payload.accountIdentifierType || null,
