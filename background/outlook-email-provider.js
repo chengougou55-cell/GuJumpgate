@@ -1,6 +1,11 @@
 (function outlookEmailProviderModule(root, factory) {
   root.MultiPageBackgroundOutlookEmailProvider = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createOutlookEmailProviderModule() {
+  const OUTLOOK_EMAIL_INBOX_LIST_TIMEOUT_MS = 12000;
+  const OUTLOOK_EMAIL_JUNK_LIST_TIMEOUT_MS = 8000;
+  const OUTLOOK_EMAIL_DETAIL_TIMEOUT_MS = 8000;
+  const OUTLOOK_EMAIL_DETAIL_LIMIT = 3;
+
   function createOutlookEmailProvider(deps = {}) {
     const {
       addLog = async () => {},
@@ -82,6 +87,7 @@
         method = 'GET',
         payload,
         searchParams,
+        signal,
         timeoutMs = 20000,
       } = options;
       const url = new URL(joinOutlookEmailUrl(config.baseUrl, path));
@@ -94,6 +100,15 @@
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+      let externalAbortHandler = null;
+      if (signal) {
+        if (signal.aborted) {
+          controller.abort(signal.reason || new Error('aborted'));
+        } else {
+          externalAbortHandler = () => controller.abort(signal.reason || new Error('aborted'));
+          signal.addEventListener('abort', externalAbortHandler, { once: true });
+        }
+      }
       let response;
       try {
         response = await fetchImpl(url.toString(), {
@@ -105,12 +120,16 @@
           signal: controller.signal,
         });
       } catch (err) {
-        const errorMessage = err?.name === 'AbortError'
+        const aborted = err?.name === 'AbortError' || err?.message === 'timeout';
+        const errorMessage = aborted
           ? `outlookEmail 请求超时（>${Math.round(timeoutMs / 1000)} 秒）`
           : `outlookEmail 请求失败：${err.message}`;
         throw new Error(errorMessage);
       } finally {
         clearTimeout(timeoutId);
+        if (signal && externalAbortHandler) {
+          signal.removeEventListener('abort', externalAbortHandler);
+        }
       }
 
       const text = await response.text();
@@ -225,6 +244,8 @@
       const folder = String(options.folder || 'inbox').trim().toLowerCase();
       const payload = await requestOutlookEmailJson(config, '/api/external/emails', {
         method: 'GET',
+        signal: options.signal,
+        timeoutMs: options.timeoutMs || OUTLOOK_EMAIL_INBOX_LIST_TIMEOUT_MS,
         searchParams: {
           email: address,
           folder,
@@ -257,6 +278,7 @@
             folder: options.folder || '',
             method: options.method || '',
           },
+          signal: options.signal,
           timeoutMs: options.timeoutMs || 15000,
         }
       );
@@ -288,9 +310,9 @@
           return rightTime - leftTime;
         })
         .slice(0, limit);
-      for (const message of candidates) {
+      const detailResults = await Promise.all(candidates.map(async (message) => {
         throwIfStopped();
-        if (!message?.id) continue;
+        if (!message?.id) return null;
         try {
           const { message: detailMessage } = await getOutlookEmailMessageDetail(state, {
             address: options.address,
@@ -298,16 +320,222 @@
             folder: message.folder || options.folder || '',
             method: message.idMode || message.raw?.id_mode || '',
             baseMessage: message,
-            timeoutMs: options.timeoutMs || 15000,
+            timeoutMs: options.timeoutMs || OUTLOOK_EMAIL_DETAIL_TIMEOUT_MS,
           });
           if (detailMessage) {
-            details.push(detailMessage);
+            return detailMessage;
           }
         } catch (err) {
           await addLog(`步骤 ${options.step || ''}：outlookEmail 邮件详情读取失败：${err.message}`.replace(/^步骤\s+：/, 'outlookEmail：'), 'warn');
         }
-      }
+        return null;
+      }));
+      details.push(...detailResults.filter(Boolean));
       return details;
+    }
+
+    async function findOutlookEmailCodeInDetails(state, detailCandidates = [], options = {}) {
+      const candidates = Array.isArray(detailCandidates) ? detailCandidates : [];
+      if (!candidates.length) {
+        return { matchResult: null, match: null };
+      }
+
+      const controllers = new Map();
+      let resolved = false;
+      const matchOptions = buildOutlookEmailMatchOptions(options.pollPayload || {});
+      const timeoutMs = options.timeoutMs || OUTLOOK_EMAIL_DETAIL_TIMEOUT_MS;
+
+      const tasks = candidates.map((message, index) => {
+        const controller = new AbortController();
+        controllers.set(index, controller);
+        return (async () => {
+          throwIfStopped();
+          try {
+            const { message: detailMessage } = await getOutlookEmailMessageDetail(state, {
+              address: options.address,
+              messageId: message.id,
+              folder: message.folder || options.folder || '',
+              method: message.idMode || message.raw?.id_mode || '',
+              baseMessage: message,
+              signal: controller.signal,
+              timeoutMs,
+            });
+            if (!detailMessage) {
+              return { index, matchResult: null, match: null };
+            }
+            const detailMatchResult = pickVerificationMessageWithTimeFallback([detailMessage], matchOptions);
+            return {
+              index,
+              matchResult: detailMatchResult,
+              match: detailMatchResult.match,
+            };
+          } catch (err) {
+            if (!resolved && err?.name !== 'AbortError') {
+              await addLog(`步骤 ${options.step || ''}：outlookEmail 邮件详情读取失败：${err.message}`.replace(/^步骤\s+：/, 'outlookEmail：'), 'warn');
+            }
+            return {
+              index,
+              matchResult: null,
+              match: null,
+              error: err,
+            };
+          } finally {
+            controllers.delete(index);
+          }
+        })();
+      });
+
+      for (let index = 0; index < tasks.length; index += 1) {
+        const result = await tasks[index];
+        if (result?.error && !resolved) {
+          resolved = true;
+          for (const [controllerIndex, controller] of controllers.entries()) {
+            if (controllerIndex > index) {
+              controller.abort(new Error('higher-priority-detail-failed'));
+            }
+          }
+          return {
+            matchResult: null,
+            match: null,
+            error: result.error,
+          };
+        }
+        if (result?.match?.code) {
+          resolved = true;
+          for (const [controllerIndex, controller] of controllers.entries()) {
+            if (controllerIndex > index) {
+              controller.abort(new Error('matched'));
+            }
+          }
+          await addLog(`步骤 ${options.step || ''}：列表邮件未命中，已通过 outlookEmail ${options.folderLabel || '邮件'}详情找到验证码。`, 'warn');
+          return result;
+        }
+      }
+
+      resolved = true;
+      return { matchResult: null, match: null };
+    }
+
+    function buildOutlookEmailMatchOptions(pollPayload = {}) {
+      return {
+        afterTimestamp: pollPayload.filterAfterTimestamp || 0,
+        senderFilters: pollPayload.senderFilters || [],
+        subjectFilters: pollPayload.subjectFilters || [],
+        requiredKeywords: pollPayload.requiredKeywords || [],
+        requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
+        codePatterns: pollPayload.codePatterns || [],
+        excludeCodes: pollPayload.excludeCodes || [],
+        preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
+        preferredKeywords: pollPayload.preferredKeywords || [],
+        excludedSenderFilters: pollPayload.excludedSenderFilters || [],
+        excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
+        excludedKeywords: pollPayload.excludedKeywords || [],
+        disableTimeFallback: true,
+        requireReceivedTimestamp: true,
+      };
+    }
+
+    function normalizeFilterList(value = []) {
+      return (Array.isArray(value) ? value : [])
+        .map((item) => String(item || '').trim().toLowerCase())
+        .filter(Boolean);
+    }
+
+    function isOutlookEmailDetailCandidate(message, pollPayload = {}) {
+      const afterTimestamp = Number(pollPayload.filterAfterTimestamp || 0) || 0;
+      const receivedAt = Date.parse(message?.receivedDateTime || '') || 0;
+      if (afterTimestamp && (!receivedAt || receivedAt < afterTimestamp)) {
+        return false;
+      }
+
+      const sender = String(message?.from?.emailAddress?.address || '').toLowerCase();
+      const subject = String(message?.subject || '').toLowerCase();
+      const preview = String(message?.bodyPreview || '').toLowerCase();
+      const combinedText = [subject, sender, preview].filter(Boolean).join(' ');
+
+      const requiredAnyKeywords = normalizeFilterList(pollPayload.requiredAnyKeywords);
+      if (requiredAnyKeywords.length && !requiredAnyKeywords.some((item) => combinedText.includes(item))) {
+        return false;
+      }
+
+      const excludedSenderFilters = normalizeFilterList(pollPayload.excludedSenderFilters);
+      const excludedSubjectFilters = normalizeFilterList(pollPayload.excludedSubjectFilters);
+      const excludedKeywords = normalizeFilterList(pollPayload.excludedKeywords);
+      if (excludedSenderFilters.some((item) => sender.includes(item) || preview.includes(item))) {
+        return false;
+      }
+      if (excludedSubjectFilters.some((item) => subject.includes(item) || preview.includes(item))) {
+        return false;
+      }
+      if (excludedKeywords.some((item) => combinedText.includes(item))) {
+        return false;
+      }
+
+      const senderFilters = normalizeFilterList(pollPayload.senderFilters);
+      const subjectFilters = normalizeFilterList(pollPayload.subjectFilters);
+      const requiredKeywords = normalizeFilterList(pollPayload.requiredKeywords);
+      if (!senderFilters.length && !subjectFilters.length && !requiredKeywords.length) {
+        return true;
+      }
+
+      return senderFilters.some((item) => combinedText.includes(item))
+        || subjectFilters.some((item) => subject.includes(item) || preview.includes(item))
+        || requiredKeywords.some((item) => combinedText.includes(item));
+    }
+
+    function scoreOutlookEmailDetailCandidate(message, pollPayload = {}) {
+      const sender = String(message?.from?.emailAddress?.address || '').toLowerCase();
+      const subject = String(message?.subject || '').toLowerCase();
+      const preview = String(message?.bodyPreview || '').toLowerCase();
+      const combinedText = [subject, sender, preview].filter(Boolean).join(' ');
+      const preferredSubjectFilters = normalizeFilterList(pollPayload.preferredSubjectFilters);
+      const preferredKeywords = normalizeFilterList(pollPayload.preferredKeywords);
+      return (
+        preferredSubjectFilters.some((item) => subject.includes(item) || preview.includes(item)) ? 2 : 0
+      ) + (
+        preferredKeywords.some((item) => combinedText.includes(item)) ? 1 : 0
+      );
+    }
+
+    function pickOutlookEmailDetailCandidates(messages = [], pollPayload = {}) {
+      const limit = Math.max(1, Math.min(10, Number(pollPayload.detailLimit) || OUTLOOK_EMAIL_DETAIL_LIMIT));
+      return (Array.isArray(messages) ? messages : [])
+        .filter((message) => message?.id && isOutlookEmailDetailCandidate(message, pollPayload))
+        .sort((left, right) => {
+          const leftScore = scoreOutlookEmailDetailCandidate(left, pollPayload);
+          const rightScore = scoreOutlookEmailDetailCandidate(right, pollPayload);
+          if (leftScore !== rightScore) {
+            return rightScore - leftScore;
+          }
+          const leftTime = Date.parse(left?.receivedDateTime || '') || 0;
+          const rightTime = Date.parse(right?.receivedDateTime || '') || 0;
+          return rightTime - leftTime;
+        })
+        .slice(0, limit);
+    }
+
+    async function findOutlookEmailCodeInMessages(latestState, targetEmail, messages, step, pollPayload = {}, options = {}) {
+      let matchResult = pickVerificationMessageWithTimeFallback(messages, buildOutlookEmailMatchOptions(pollPayload));
+      let match = matchResult.match;
+      if (!match?.code) {
+        const detailCandidates = pickOutlookEmailDetailCandidates(messages, pollPayload);
+        if (detailCandidates.length) {
+          const detailMatch = await findOutlookEmailCodeInDetails(latestState, detailCandidates, {
+            address: targetEmail,
+            folderLabel: options.folderLabel,
+            pollPayload,
+            step,
+            timeoutMs: pollPayload.detailTimeoutMs || OUTLOOK_EMAIL_DETAIL_TIMEOUT_MS,
+          });
+          if (detailMatch.match?.code) {
+            matchResult = detailMatch.matchResult;
+            match = detailMatch.match;
+          } else if (detailMatch.error) {
+            throw detailMatch.error;
+          }
+        }
+      }
+      return { matchResult, match };
     }
 
     function summarizeOutlookEmailMessagesForLog(messages) {
@@ -341,83 +569,104 @@
       const maxAttempts = Number(pollPayload.maxAttempts) || 5;
       const intervalMs = Number(pollPayload.intervalMs) || 3000;
       let lastError = null;
+      const folderConfigs = [
+        {
+          folder: 'inbox',
+          label: '收件箱',
+          timeoutMs: pollPayload.inboxListTimeoutMs || pollPayload.listTimeoutMs || OUTLOOK_EMAIL_INBOX_LIST_TIMEOUT_MS,
+        },
+        {
+          folder: 'junkemail',
+          label: '垃圾邮件',
+          timeoutMs: pollPayload.junkListTimeoutMs || pollPayload.listTimeoutMs || OUTLOOK_EMAIL_JUNK_LIST_TIMEOUT_MS,
+        },
+      ];
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         throwIfStopped();
         try {
           const results = [];
-          for (const folder of ['inbox', 'junkemail']) {
-            try {
-              const { messages } = await listOutlookEmailMessages(latestState, {
-                address: targetEmail,
-                folder,
-                limit: pollPayload.limit || OUTLOOK_EMAIL_DEFAULT_PAGE_SIZE,
-              });
-              results.push(...messages);
-            } catch (err) {
-              if (folder === 'inbox') throw err;
-              await addLog(`步骤 ${step}：outlookEmail 垃圾邮件轮询失败：${err.message}`, 'warn');
-            }
-          }
-
-          let matchResult = pickVerificationMessageWithTimeFallback(results, {
-            afterTimestamp: pollPayload.filterAfterTimestamp || 0,
-            senderFilters: pollPayload.senderFilters || [],
-            subjectFilters: pollPayload.subjectFilters || [],
-            requiredKeywords: pollPayload.requiredKeywords || [],
-            requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
-            codePatterns: pollPayload.codePatterns || [],
-            excludeCodes: pollPayload.excludeCodes || [],
-            preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
-            preferredKeywords: pollPayload.preferredKeywords || [],
-            excludedSenderFilters: pollPayload.excludedSenderFilters || [],
-            excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
-            excludedKeywords: pollPayload.excludedKeywords || [],
-            disableTimeFallback: true,
-            requireReceivedTimestamp: true,
-          });
-          let match = matchResult.match;
-          if (!match?.code) {
-            const detailMessages = await fetchOutlookEmailMessageDetails(latestState, results, {
-              address: targetEmail,
-              limit: pollPayload.detailLimit || 10,
-              step,
-            });
-            if (detailMessages.length) {
-              const detailMatchResult = pickVerificationMessageWithTimeFallback(detailMessages, {
-                afterTimestamp: pollPayload.filterAfterTimestamp || 0,
-                senderFilters: pollPayload.senderFilters || [],
-                subjectFilters: pollPayload.subjectFilters || [],
-                requiredKeywords: pollPayload.requiredKeywords || [],
-                requiredAnyKeywords: pollPayload.requiredAnyKeywords || [],
-                codePatterns: pollPayload.codePatterns || [],
-                excludeCodes: pollPayload.excludeCodes || [],
-                preferredSubjectFilters: pollPayload.preferredSubjectFilters || [],
-                preferredKeywords: pollPayload.preferredKeywords || [],
-                excludedSenderFilters: pollPayload.excludedSenderFilters || [],
-                excludedSubjectFilters: pollPayload.excludedSubjectFilters || [],
-                excludedKeywords: pollPayload.excludedKeywords || [],
-                disableTimeFallback: true,
-                requireReceivedTimestamp: true,
-              });
-              if (detailMatchResult.match?.code) {
-                matchResult = detailMatchResult;
-                match = detailMatchResult.match;
-                await addLog(`步骤 ${step}：列表邮件未命中，已通过 outlookEmail 邮件详情找到验证码。`, 'warn');
-              }
-            }
-          }
-          if (match?.code) {
-            if (matchResult.usedRelaxedFilters) {
-              const fallbackLabel = matchResult.usedTimeFallback ? '宽松匹配 + 时间回退' : '宽松匹配';
-              await addLog(`步骤 ${step}：严格规则未命中，已改用 ${fallbackLabel} 并命中 outlookEmail 验证码。`, 'warn');
-            }
-            await addLog(`步骤 ${step}：已通过 outlookEmail 找到验证码：${match.code}`, 'ok');
+          const folderTasks = folderConfigs.map((folderConfig) => {
+            const controller = new AbortController();
             return {
-              ok: true,
-              code: match.code,
-              emailTimestamp: match.receivedAt || Date.now(),
-              mailId: match.message?.id || '',
+              folderConfig,
+              controller,
+              promise: (async () => {
+                if (Number(folderConfig.startDelayMs) > 0) {
+                  await sleepWithStop(Number(folderConfig.startDelayMs));
+                }
+                throwIfStopped();
+                try {
+                  const result = await listOutlookEmailMessages(latestState, {
+                    address: targetEmail,
+                    folder: folderConfig.folder,
+                    limit: pollPayload.limit || OUTLOOK_EMAIL_DEFAULT_PAGE_SIZE,
+                    signal: controller.signal,
+                    timeoutMs: folderConfig.timeoutMs,
+                  });
+                  return {
+                    folderConfig,
+                    messages: result.messages || [],
+                    error: null,
+                  };
+                } catch (err) {
+                  return {
+                    folderConfig,
+                    messages: [],
+                    error: err,
+                  };
+                }
+              })(),
             };
+          });
+
+          const abortLowerPriorityFolderTasks = (folderIndex) => {
+            for (let index = folderIndex + 1; index < folderTasks.length; index += 1) {
+              folderTasks[index].controller.abort(new Error('higher-priority-folder-matched'));
+            }
+          };
+
+          const folderErrors = [];
+          for (let folderIndex = 0; folderIndex < folderTasks.length; folderIndex += 1) {
+            const folderResult = await folderTasks[folderIndex].promise;
+            const { folderConfig, messages, error } = folderResult;
+            if (error) {
+              folderErrors.push({ label: folderConfig.label, error });
+              await addLog(`步骤 ${step}：outlookEmail ${folderConfig.label}轮询失败：${error.message}`, 'warn');
+              continue;
+            }
+            try {
+              results.push(...messages);
+              const { matchResult, match } = await findOutlookEmailCodeInMessages(
+                latestState,
+                targetEmail,
+                messages,
+                step,
+                pollPayload,
+                { folderLabel: folderConfig.label }
+              );
+              if (match?.code) {
+                if (matchResult.usedRelaxedFilters) {
+                  const fallbackLabel = matchResult.usedTimeFallback ? '宽松匹配 + 时间回退' : '宽松匹配';
+                  await addLog(`步骤 ${step}：严格规则未命中，已改用 ${fallbackLabel} 并命中 outlookEmail 验证码。`, 'warn');
+                }
+                await addLog(`步骤 ${step}：已通过 outlookEmail 找到验证码：${match.code}`, 'ok');
+                abortLowerPriorityFolderTasks(folderIndex);
+                return {
+                  ok: true,
+                  code: match.code,
+                  emailTimestamp: match.receivedAt || Date.now(),
+                  mailId: match.message?.id || '',
+                };
+              }
+            } catch (err) {
+              folderErrors.push({ label: folderConfig.label, error: err });
+              await addLog(`步骤 ${step}：outlookEmail ${folderConfig.label}匹配失败：${err.message}`, 'warn');
+            }
+          }
+          if (!results.length && folderErrors.length) {
+            throw new Error(folderErrors
+              .map((item) => `${item.label}：${item.error.message}`)
+              .join('；'));
           }
 
           lastError = new Error(`步骤 ${step}：暂未在 outlookEmail 中找到匹配验证码（${attempt}/${maxAttempts}）。`);
