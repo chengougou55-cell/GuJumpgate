@@ -816,15 +816,18 @@ function FindProxyForURL(url, host) {
       const entries = [];
       for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index];
+        const pipeSeparatorIndex = line.indexOf('|');
         const separatorIndex = line.indexOf(HOSTED_CHECKOUT_SMS_POOL_SEPARATOR);
-        const hasSeparator = separatorIndex > 0;
-        const phone = hasSeparator
-          ? normalizeHostedCheckoutPoolPhone(line.slice(0, separatorIndex))
+        const inlineSeparator = separatorIndex > 0
+          ? { index: separatorIndex, length: HOSTED_CHECKOUT_SMS_POOL_SEPARATOR.length }
+          : (pipeSeparatorIndex > 0 ? { index: pipeSeparatorIndex, length: 1 } : null);
+        const phone = inlineSeparator
+          ? normalizeHostedCheckoutPoolPhone(line.slice(0, inlineSeparator.index))
           : normalizeHostedCheckoutPoolPhone(line);
-        const verificationUrl = hasSeparator
-          ? normalizeHostedCheckoutPoolUrl(line.slice(separatorIndex + HOSTED_CHECKOUT_SMS_POOL_SEPARATOR.length))
+        const verificationUrl = inlineSeparator
+          ? normalizeHostedCheckoutPoolUrl(line.slice(inlineSeparator.index + inlineSeparator.length))
           : normalizeHostedCheckoutPoolUrl(lines[index + 1] || '');
-        if (!hasSeparator && verificationUrl) {
+        if (!inlineSeparator && verificationUrl) {
           index += 1;
         }
         const key = buildHostedCheckoutPoolKey(phone, verificationUrl);

@@ -97,3 +97,33 @@ test('manual hosted checkout code fetch ignores PayPal confirmation text with ex
     /暂未返回有效验证码/
   );
 });
+
+test('hosted checkout sms pool accepts phone pipe url entries', async () => {
+  const patches = [];
+  let requestedUrl = '';
+  const verificationUrl = 'https://sms.699.chat/api/get_sms?key=251a4a4760a848ba4920cb179f589236';
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    fetch: async (url) => {
+      requestedUrl = String(url || '');
+      return {
+        text: async () => "yes|PayPal: 201412 is your security code. Don't share it.|(PayPal)|到期时间：2026-07-29 00:00:00",
+      };
+    },
+    getState: async () => ({
+      hostedCheckoutSmsPoolText: `+15824441369|${verificationUrl}`,
+      hostedCheckoutSmsPoolUsage: {},
+    }),
+    setState: async (patch) => {
+      patches.push(patch);
+    },
+  });
+
+  const result = await executor.fetchHostedCheckoutVerificationCodeManually();
+  const selectedEntry = patches.find((patch) => patch.hostedCheckoutCurrentSmsEntry)?.hostedCheckoutCurrentSmsEntry;
+
+  assert.equal(result.code, '201412');
+  assert.equal(result.verificationUrl, verificationUrl);
+  assert.match(requestedUrl, /^https:\/\/sms\.699\.chat\/api\/get_sms\?key=251a4a4760a848ba4920cb179f589236&t=\d+$/);
+  assert.equal(selectedEntry.phone, '5824441369');
+  assert.equal(selectedEntry.verificationUrl, verificationUrl);
+});

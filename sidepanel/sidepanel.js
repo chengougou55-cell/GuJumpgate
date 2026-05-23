@@ -3151,15 +3151,18 @@ function parseHostedCheckoutSmsPoolEntries(value = '') {
   const entries = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    const pipeSeparatorIndex = line.indexOf('|');
     const separatorIndex = line.indexOf(separator);
-    const hasSeparator = separatorIndex > 0;
-    const phone = hasSeparator
-      ? normalizeHostedCheckoutPhoneValue(line.slice(0, separatorIndex))
+    const inlineSeparator = separatorIndex > 0
+      ? { index: separatorIndex, length: separator.length }
+      : (pipeSeparatorIndex > 0 ? { index: pipeSeparatorIndex, length: 1 } : null);
+    const phone = inlineSeparator
+      ? normalizeHostedCheckoutPhoneValue(line.slice(0, inlineSeparator.index))
       : normalizeHostedCheckoutPhoneValue(line);
-    const verificationUrl = hasSeparator
-      ? normalizeHostedCheckoutPoolUrlValue(line.slice(separatorIndex + separator.length))
+    const verificationUrl = inlineSeparator
+      ? normalizeHostedCheckoutPoolUrlValue(line.slice(inlineSeparator.index + inlineSeparator.length))
       : normalizeHostedCheckoutPoolUrlValue(lines[index + 1] || '');
-    if (!hasSeparator && verificationUrl) {
+    if (!inlineSeparator && verificationUrl) {
       index += 1;
     }
     const key = phone && verificationUrl ? `${phone}${separator}${verificationUrl}` : '';

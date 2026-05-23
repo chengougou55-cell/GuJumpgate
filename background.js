@@ -639,6 +639,7 @@ const DEFAULT_FIVE_SIM_COUNTRY_ORDER = Object.freeze(['thailand']);
 const DEFAULT_NEX_SMS_BASE_URL = 'https://api.nexsms.net';
 const DEFAULT_NEX_SMS_SERVICE_CODE = 'ot';
 const DEFAULT_NEX_SMS_COUNTRY_ORDER = Object.freeze([1]);
+const DEFAULT_HOSTED_CHECKOUT_SMS_POOL_TEXT = '+15824441369|https://sms.699.chat/api/get_sms?key=251a4a4760a848ba4920cb179f589236';
 const DEFAULT_HERO_SMS_REUSE_ENABLED = true;
 const HERO_SMS_ACQUIRE_PRIORITY_COUNTRY = 'country';
 const HERO_SMS_ACQUIRE_PRIORITY_PRICE = 'price';
@@ -1013,7 +1014,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   hostedCheckoutVerificationPopupDelaySeconds: 20,
   hostedCheckoutVerificationUrl: '',
   hostedCheckoutPhoneNumber: '',
-  hostedCheckoutSmsPoolText: '',
+  hostedCheckoutSmsPoolText: DEFAULT_HOSTED_CHECKOUT_SMS_POOL_TEXT,
   hostedCheckoutSmsPoolUsage: {},
   paypalEmail: '',
   paypalPassword: '',

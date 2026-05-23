@@ -160,7 +160,7 @@
         signupProfile,
         resendIntervalMs: mail.provider === LUCKMAIL_PROVIDER
           ? 15000
-          : ((mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
+          : ((mail.provider === HOTMAIL_PROVIDER || mail.provider === OUTLOOK_EMAIL_PROVIDER || mail.provider === '2925')
             ? 0
             : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS),
       });
