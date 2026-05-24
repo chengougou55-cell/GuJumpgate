@@ -1039,6 +1039,7 @@ async function createPlusCheckoutSession(options = {}) {
   if (!accessToken) {
     throw new Error('请先登录 ChatGPT，当前页面未返回可用 accessToken。');
   }
+  const sessionEmail = String(session?.user?.email || session?.email || '').trim();
 
   log('Plus：正在创建 checkout 会话...');
   const paymentMethod = normalizePlusPaymentMethod(options.paymentMethod);
@@ -1079,6 +1080,7 @@ async function createPlusCheckoutSession(options = {}) {
     preferredCheckoutUrl,
     country: checkoutPayload.billing_details.country,
     currency: checkoutPayload.billing_details.currency,
+    sessionEmail,
   };
 }
 

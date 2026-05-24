@@ -574,6 +574,7 @@ const stepsList = document.querySelector('.steps-list');
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+const PLUS_PAYMENT_METHOD_SKIP_CHECKOUT = 'skip-checkout';
 const PAYPAL_HOSTED_GENERIC_ERROR_AUTO_RETRY_DELAY_MS = 15000;
 const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL = 'https://gujumpgate.zg.fyi/api/checkout';
 const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY = '2KwVxE6f0ABH002JLkoQJ9ReRf4_d01y';
@@ -915,19 +916,17 @@ function getStepDefinitionsForMode(plusModeEnabled = false, options = {}) {
   const activeFlowId = typeof options === 'string'
     ? ((typeof latestState !== 'undefined' ? latestState?.activeFlowId : '') || defaultFlowId)
     : (options.activeFlowId || (typeof latestState !== 'undefined' ? latestState?.activeFlowId : '') || defaultFlowId);
+  const normalizedAccountAccessStrategy = typeof normalizePlusAccountAccessStrategy === 'function'
+    ? normalizePlusAccountAccessStrategy(rawAccountAccessStrategy)
+    : rawAccountAccessStrategy;
   const requestOptions = {
     activeFlowId: String(activeFlowId || '').trim().toLowerCase() || defaultFlowId,
     plusModeEnabled,
     plusPaymentMethod: normalizePlusPaymentMethod(rawPaymentMethod),
+    plusAccountAccessStrategy: normalizedAccountAccessStrategy,
     signupMethod: normalizeSignupMethod(rawSignupMethod),
     phoneSignupReloginAfterBindEmailEnabled,
   };
-  const normalizedAccountAccessStrategy = typeof normalizePlusAccountAccessStrategy === 'function'
-    ? normalizePlusAccountAccessStrategy(rawAccountAccessStrategy)
-    : rawAccountAccessStrategy;
-  if (normalizedAccountAccessStrategy && normalizedAccountAccessStrategy !== defaultAccountAccessStrategy) {
-    requestOptions.plusAccountAccessStrategy = normalizedAccountAccessStrategy;
-  }
   if (typeof options !== 'string' && options?.panelMode !== undefined) {
     requestOptions.panelMode = options.panelMode;
   }
@@ -961,19 +960,17 @@ function getWorkflowNodesForMode(plusModeEnabled = false, options = {}) {
   const activeFlowId = typeof options === 'string'
     ? ((typeof latestState !== 'undefined' ? latestState?.activeFlowId : '') || defaultFlowId)
     : (options.activeFlowId || (typeof latestState !== 'undefined' ? latestState?.activeFlowId : '') || defaultFlowId);
+  const normalizedAccountAccessStrategy = typeof normalizePlusAccountAccessStrategy === 'function'
+    ? normalizePlusAccountAccessStrategy(rawAccountAccessStrategy)
+    : rawAccountAccessStrategy;
   const requestOptions = {
     activeFlowId: String(activeFlowId || '').trim().toLowerCase() || defaultFlowId,
     plusModeEnabled,
     plusPaymentMethod: normalizePlusPaymentMethod(rawPaymentMethod),
+    plusAccountAccessStrategy: normalizedAccountAccessStrategy,
     signupMethod: normalizeSignupMethod(rawSignupMethod),
     phoneSignupReloginAfterBindEmailEnabled,
   };
-  const normalizedAccountAccessStrategy = typeof normalizePlusAccountAccessStrategy === 'function'
-    ? normalizePlusAccountAccessStrategy(rawAccountAccessStrategy)
-    : rawAccountAccessStrategy;
-  if (normalizedAccountAccessStrategy && normalizedAccountAccessStrategy !== defaultAccountAccessStrategy) {
-    requestOptions.plusAccountAccessStrategy = normalizedAccountAccessStrategy;
-  }
   if (typeof options !== 'string' && options?.panelMode !== undefined) {
     requestOptions.panelMode = options.panelMode;
   }
@@ -2766,8 +2763,12 @@ function normalizePlusPaymentMethod(value = '') {
   }
   const gopayValue = typeof PLUS_PAYMENT_METHOD_GOPAY !== 'undefined' ? PLUS_PAYMENT_METHOD_GOPAY : 'gopay';
   const gpcValue = typeof PLUS_PAYMENT_METHOD_GPC_HELPER !== 'undefined' ? PLUS_PAYMENT_METHOD_GPC_HELPER : 'gpc-helper';
+  const skipCheckoutValue = typeof PLUS_PAYMENT_METHOD_SKIP_CHECKOUT !== 'undefined' ? PLUS_PAYMENT_METHOD_SKIP_CHECKOUT : 'skip-checkout';
   const paypalValue = typeof PLUS_PAYMENT_METHOD_PAYPAL !== 'undefined' ? PLUS_PAYMENT_METHOD_PAYPAL : 'paypal';
   const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === skipCheckoutValue) {
+    return skipCheckoutValue;
+  }
   if (normalized === gpcValue) {
     return gpcValue;
   }
@@ -8949,6 +8950,7 @@ function updatePlusModeUI() {
   const paypalValue = typeof PLUS_PAYMENT_METHOD_PAYPAL !== 'undefined' ? PLUS_PAYMENT_METHOD_PAYPAL : 'paypal';
   const gopayValue = typeof PLUS_PAYMENT_METHOD_GOPAY !== 'undefined' ? PLUS_PAYMENT_METHOD_GOPAY : 'gopay';
   const gpcValue = typeof PLUS_PAYMENT_METHOD_GPC_HELPER !== 'undefined' ? PLUS_PAYMENT_METHOD_GPC_HELPER : 'gpc-helper';
+  const skipCheckoutValue = typeof PLUS_PAYMENT_METHOD_SKIP_CHECKOUT !== 'undefined' ? PLUS_PAYMENT_METHOD_SKIP_CHECKOUT : 'skip-checkout';
   const defaultMethod = typeof DEFAULT_PLUS_PAYMENT_METHOD !== 'undefined' ? DEFAULT_PLUS_PAYMENT_METHOD : paypalValue;
   const rawEnabled = typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
     ? Boolean(inputPlusModeEnabled.checked)
@@ -9019,6 +9021,8 @@ function updatePlusModeUI() {
   if (typeof plusPaymentMethodCaption !== 'undefined' && plusPaymentMethodCaption) {
     plusPaymentMethodCaption.textContent = selectedMethod === gpcValue
       ? `GPC ${isGpcAutoMode ? '自动' : '手动'}订阅链路`
+      : selectedMethod === skipCheckoutValue
+      ? '不执行创建 Checkout，按账号接入策略继续'
       : selectedMethod === gopayValue
       ? 'GoPay 印尼订阅链路'
       : 'PayPal 订阅链路';
@@ -13664,7 +13668,7 @@ stepsList?.addEventListener('click', async (event) => {
       return;
     }
     await persistCurrentSettingsForAction();
-    const gpcCreateStep = getStepIdByKeyForCurrentMode('plus-checkout-create') || 6;
+    const gpcCreateStep = getStepIdByKeyForCurrentMode('plus-checkout-create');
     if (step === gpcCreateStep) {
       const hostedCheckoutValidation = validateHostedCheckoutContactConfig({ focusOnError: true });
       if (!hostedCheckoutValidation.valid) {

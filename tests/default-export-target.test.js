@@ -53,6 +53,72 @@ test('sidepanel initial checkout conversion uses cloud mode', () => {
   assert.match(html, /<input type="checkbox" id="input-plus-checkout-cloud-conversion-enabled" checked \/>/);
 });
 
+test('skip checkout plus payment mode omits checkout creation step', () => {
+  const sandbox = {};
+  vm.runInNewContext(readProjectFile('data/step-definitions.js'), sandbox);
+
+  const stepDefinitions = sandbox.MultiPageStepDefinitions;
+  const steps = stepDefinitions.getSteps({
+    activeFlowId: 'openai',
+    plusModeEnabled: true,
+    plusPaymentMethod: 'skip-checkout',
+    plusAccountAccessStrategy: 'oauth',
+  });
+
+  assert.equal(stepDefinitions.normalizePlusPaymentMethod('skip-checkout'), 'skip-checkout');
+  assert.deepEqual(
+    Array.from(steps, (step) => [step.id, step.key]),
+    [
+      [1, 'open-chatgpt'],
+      [2, 'submit-signup-email'],
+      [3, 'fill-password'],
+      [4, 'fetch-signup-code'],
+      [5, 'fill-profile'],
+      [7, 'oauth-login'],
+      [8, 'fetch-login-code'],
+      [9, 'confirm-oauth'],
+      [10, 'platform-verify'],
+    ]
+  );
+  assert.equal(steps.some((step) => step.key === 'plus-checkout-create'), false);
+  assert.equal(steps.some((step) => step.id === 6), false);
+});
+
+test('skip checkout keeps session import strategy when selected', () => {
+  const sandbox = {};
+  vm.runInNewContext(readProjectFile('data/step-definitions.js'), sandbox);
+
+  const stepDefinitions = sandbox.MultiPageStepDefinitions;
+  const steps = stepDefinitions.getSteps({
+    activeFlowId: 'openai',
+    plusModeEnabled: true,
+    plusPaymentMethod: 'skip-checkout',
+    plusAccountAccessStrategy: 'sub2api_codex_session',
+  });
+
+  assert.deepEqual(
+    Array.from(steps, (step) => [step.id, step.key]),
+    [
+      [1, 'open-chatgpt'],
+      [2, 'submit-signup-email'],
+      [3, 'fill-password'],
+      [4, 'fetch-signup-code'],
+      [5, 'fill-profile'],
+      [7, 'sub2api-session-import'],
+    ]
+  );
+  assert.equal(steps.some((step) => step.key === 'plus-checkout-create'), false);
+  assert.equal(steps.some((step) => step.id === 6), false);
+});
+
+test('sidepanel always passes plus account access strategy to step definitions', () => {
+  const script = readProjectFile('sidepanel/sidepanel.js');
+
+  assert.match(script, /plusAccountAccessStrategy: normalizedAccountAccessStrategy,/);
+  assert.doesNotMatch(script, /normalizedAccountAccessStrategy\s*&&\s*normalizedAccountAccessStrategy\s*!==\s*defaultAccountAccessStrategy/);
+  assert.doesNotMatch(script, /getStepIdByKeyForCurrentMode\('plus-checkout-create'\)\s*\|\|\s*6/);
+});
+
 test('outlookEmail is the default mail service', () => {
   const html = readProjectFile('sidepanel/sidepanel.html');
   const backgroundScript = readProjectFile('background.js');

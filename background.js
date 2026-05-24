@@ -71,6 +71,25 @@ importScripts(
   'content/activation-utils.js'
 );
 
+importScripts('background/local-settings.js');
+try {
+  importScripts('background/local-settings.private.js');
+} catch (err) {
+  if (!/local-settings\.private\.js/.test(String(err?.message || err || ''))) {
+    console.warn('[MultiPage BG] Failed to load private local settings:', err?.message || err);
+  }
+}
+
+const LOCAL_SETTINGS = self.GuJumpgateLocalSettings && typeof self.GuJumpgateLocalSettings === 'object'
+  ? self.GuJumpgateLocalSettings
+  : {};
+const LOCAL_SUB2API_SETTING_KEYS = Object.freeze([
+  'sub2apiUrl',
+  'sub2apiEmail',
+  'sub2apiPassword',
+]);
+const PLUS_CHECKOUT_BARK_SENT_RECORDS_KEY = 'plusCheckoutBarkSentRecords';
+
 const DEFAULT_ACTIVE_FLOW_ID = 'openai';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH = 'oauth';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION = 'sub2api_codex_session';
@@ -181,6 +200,36 @@ const PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS = self.MultiPageStepDe
   signupMethod: 'phone',
   phoneSignupReloginAfterBindEmailEnabled: true,
 }) || PLUS_GPC_PHONE_STEP_DEFINITIONS;
+const PLUS_SKIP_CHECKOUT_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
+  activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
+  plusModeEnabled: true,
+  plusPaymentMethod: 'skip-checkout',
+}) || PLUS_PAYPAL_STEP_DEFINITIONS.filter((definition) => String(definition?.key || '') !== 'plus-checkout-create');
+const PLUS_SKIP_CHECKOUT_SUB2API_SESSION_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
+  activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
+  plusModeEnabled: true,
+  plusPaymentMethod: 'skip-checkout',
+  plusAccountAccessStrategy: PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION,
+}) || PLUS_SKIP_CHECKOUT_STEP_DEFINITIONS;
+const PLUS_SKIP_CHECKOUT_CPA_SESSION_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
+  activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
+  plusModeEnabled: true,
+  plusPaymentMethod: 'skip-checkout',
+  plusAccountAccessStrategy: PLUS_ACCOUNT_ACCESS_STRATEGY_CPA_CODEX_SESSION,
+}) || PLUS_SKIP_CHECKOUT_STEP_DEFINITIONS;
+const PLUS_SKIP_CHECKOUT_PHONE_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
+  activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
+  plusModeEnabled: true,
+  plusPaymentMethod: 'skip-checkout',
+  signupMethod: 'phone',
+}) || PLUS_SKIP_CHECKOUT_STEP_DEFINITIONS;
+const PLUS_SKIP_CHECKOUT_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
+  activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
+  plusModeEnabled: true,
+  plusPaymentMethod: 'skip-checkout',
+  signupMethod: 'phone',
+  phoneSignupReloginAfterBindEmailEnabled: true,
+}) || PLUS_SKIP_CHECKOUT_PHONE_STEP_DEFINITIONS;
 const LOCAL_CPA_JSON_NO_RT_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
   activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
   panelMode: 'local-cpa-json-no-rt',
@@ -208,6 +257,11 @@ const ALL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getAllSteps?.({
   ...PLUS_GPC_CPA_SESSION_STEP_DEFINITIONS,
   ...PLUS_GPC_PHONE_STEP_DEFINITIONS,
   ...PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
+  ...PLUS_SKIP_CHECKOUT_STEP_DEFINITIONS,
+  ...PLUS_SKIP_CHECKOUT_SUB2API_SESSION_STEP_DEFINITIONS,
+  ...PLUS_SKIP_CHECKOUT_CPA_SESSION_STEP_DEFINITIONS,
+  ...PLUS_SKIP_CHECKOUT_PHONE_STEP_DEFINITIONS,
+  ...PLUS_SKIP_CHECKOUT_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
 ];
 const STEP_IDS = Array.from(new Set(ALL_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
@@ -234,12 +288,17 @@ const PLUS_GPC_STEP_IDS = PLUS_GPC_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
   .filter(Number.isFinite)
   .sort((left, right) => left - right);
+const PLUS_SKIP_CHECKOUT_STEP_IDS = PLUS_SKIP_CHECKOUT_STEP_DEFINITIONS
+  .map((definition) => Number(definition?.id))
+  .filter(Number.isFinite)
+  .sort((left, right) => left - right);
 const PLUS_STEP_IDS = PLUS_PAYPAL_STEP_IDS;
 const LAST_STEP_ID = Math.max(
   NORMAL_STEP_IDS[NORMAL_STEP_IDS.length - 1] || 10,
   PLUS_PAYPAL_STEP_IDS[PLUS_PAYPAL_STEP_IDS.length - 1] || 10,
   PLUS_GOPAY_STEP_IDS[PLUS_GOPAY_STEP_IDS.length - 1] || 10,
-  PLUS_GPC_STEP_IDS[PLUS_GPC_STEP_IDS.length - 1] || 10
+  PLUS_GPC_STEP_IDS[PLUS_GPC_STEP_IDS.length - 1] || 10,
+  PLUS_SKIP_CHECKOUT_STEP_IDS[PLUS_SKIP_CHECKOUT_STEP_IDS.length - 1] || 10
 );
 const FINAL_OAUTH_CHAIN_START_STEP = 7;
 
@@ -667,6 +726,7 @@ const FIVE_SIM_OPERATOR = DEFAULT_FIVE_SIM_OPERATOR;
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+const PLUS_PAYMENT_METHOD_SKIP_CHECKOUT = 'skip-checkout';
 const DEFAULT_PLUS_PAYMENT_METHOD = PLUS_PAYMENT_METHOD_PAYPAL;
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
@@ -708,6 +768,9 @@ function isPlusModeState(state = {}) {
 
 function normalizePlusPaymentMethod(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === PLUS_PAYMENT_METHOD_SKIP_CHECKOUT) {
+    return PLUS_PAYMENT_METHOD_SKIP_CHECKOUT;
+  }
   if (normalized === PLUS_PAYMENT_METHOD_GPC_HELPER) {
     return PLUS_PAYMENT_METHOD_GPC_HELPER;
   }
@@ -790,6 +853,17 @@ function getStepDefinitionsForState(state = {}) {
   const plusAccountAccessStrategy = fallbackSignupMethod === SIGNUP_METHOD_PHONE
     ? PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH
     : normalizePlusAccountAccessStrategyForState(state);
+  if (paymentMethod === PLUS_PAYMENT_METHOD_SKIP_CHECKOUT) {
+    if (plusAccountAccessStrategy === PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION) {
+      return PLUS_SKIP_CHECKOUT_SUB2API_SESSION_STEP_DEFINITIONS;
+    }
+    if (plusAccountAccessStrategy === PLUS_ACCOUNT_ACCESS_STRATEGY_CPA_CODEX_SESSION) {
+      return PLUS_SKIP_CHECKOUT_CPA_SESSION_STEP_DEFINITIONS;
+    }
+    return fallbackSignupMethod === SIGNUP_METHOD_PHONE
+      ? PLUS_SKIP_CHECKOUT_PHONE_STEP_DEFINITIONS
+      : PLUS_SKIP_CHECKOUT_STEP_DEFINITIONS;
+  }
   if (paymentMethod === PLUS_PAYMENT_METHOD_GPC_HELPER) {
     if (plusAccountAccessStrategy === PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION) {
       return PLUS_GPC_SUB2API_SESSION_STEP_DEFINITIONS;
@@ -831,6 +905,9 @@ function getStepIdsForState(state = {}) {
   const paymentMethod = normalizePlusPaymentMethod(state?.plusPaymentMethod);
   if (paymentMethod === PLUS_PAYMENT_METHOD_GPC_HELPER) {
     return PLUS_GPC_STEP_IDS;
+  }
+  if (paymentMethod === PLUS_PAYMENT_METHOD_SKIP_CHECKOUT) {
+    return PLUS_SKIP_CHECKOUT_STEP_IDS;
   }
   return paymentMethod === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_GOPAY_STEP_IDS : PLUS_PAYPAL_STEP_IDS;
 }
@@ -1888,6 +1965,9 @@ function normalizePlusPaymentMethod(value = '') {
     return rootScope.GoPayUtils.normalizePlusPaymentMethod(value);
   }
   const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === PLUS_PAYMENT_METHOD_SKIP_CHECKOUT) {
+    return PLUS_PAYMENT_METHOD_SKIP_CHECKOUT;
+  }
   if (normalized === PLUS_PAYMENT_METHOD_GPC_HELPER) {
     return PLUS_PAYMENT_METHOD_GPC_HELPER;
   }
@@ -3487,6 +3567,29 @@ function normalizePersistentSettingValue(key, value) {
   }
 }
 
+function buildLocalSub2ApiSettingsOverride(settings = LOCAL_SETTINGS) {
+  const source = settings && typeof settings === 'object' && !Array.isArray(settings)
+    ? settings
+    : {};
+  const sub2apiSettings = source.sub2api && typeof source.sub2api === 'object' && !Array.isArray(source.sub2api)
+    ? source.sub2api
+    : {};
+  const payload = {};
+
+  for (const key of LOCAL_SUB2API_SETTING_KEYS) {
+    const value = sub2apiSettings[key] !== undefined ? sub2apiSettings[key] : source[key];
+    if (value === undefined) {
+      continue;
+    }
+    const normalized = normalizePersistentSettingValue(key, value);
+    if (key === 'sub2apiPassword' ? String(normalized || '') : String(normalized || '').trim()) {
+      payload[key] = normalized;
+    }
+  }
+
+  return payload;
+}
+
 function buildPersistentSettingsPayload(input = {}, options = {}) {
   const { fillDefaults = false, requireKnownKeys = false } = options;
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -3666,11 +3769,13 @@ async function getState() {
     getPersistedAliasState(),
     accountRunHistoryHelpers?.getPersistedAccountRunHistory?.() || [],
   ]);
+  const localSub2ApiSettings = buildLocalSub2ApiSettingsOverride();
   return buildStateViewWithRuntimeState({
     ...DEFAULT_STATE,
     ...persistedSettings,
     ...persistedAliasState,
     ...state,
+    ...localSub2ApiSettings,
     accountRunHistory,
   });
 }
@@ -11285,6 +11390,116 @@ async function reportCompletedNodeSideEffectError(nodeId, error) {
   await addLog(`已完成，但完成后的收尾处理失败：${message}`, 'warn', { nodeId });
 }
 
+function normalizeNotificationEmail(value = '') {
+  const email = String(value || '').trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+}
+
+function getPlusCheckoutBarkBaseUrl() {
+  const candidates = [
+    LOCAL_SETTINGS?.plusCheckoutBarkUrl,
+    LOCAL_SETTINGS?.bark?.plusCheckoutUrl,
+    LOCAL_SETTINGS?.bark?.url,
+  ];
+  for (const candidate of candidates) {
+    const url = String(candidate || '').trim();
+    if (/^https:\/\/api\.day\.app\/[^/?#\s]+\/?$/i.test(url)) {
+      return url.replace(/\/+$/, '');
+    }
+  }
+  return '';
+}
+
+function getPlusCheckoutNotificationEmail(state = {}, payload = {}) {
+  return normalizeNotificationEmail(
+    payload?.chatgptEmail
+    || payload?.sessionEmail
+    || payload?.email
+    || state?.chatgptEmail
+    || state?.email
+    || state?.accountIdentifier
+    || state?.registrationEmailState?.current
+    || ''
+  );
+}
+
+function buildPlusCheckoutBarkRecordKey(state = {}, payload = {}, email = '') {
+  const runId = String(state?.runId || state?.activeRunId || '').trim();
+  const checkoutId = String(payload?.checkoutSessionId || payload?.gopayHelperTaskId || state?.gopayHelperTaskId || '').trim();
+  const source = String(payload?.plusCheckoutSource || state?.plusCheckoutSource || '').trim();
+  return [
+    'plus-checkout-create',
+    normalizeNotificationEmail(email).toLowerCase(),
+    runId || checkoutId || source || String(state?.flowStartTime || ''),
+  ].join('|');
+}
+
+async function getPlusCheckoutBarkSentRecords() {
+  const stored = await chrome.storage.local.get(PLUS_CHECKOUT_BARK_SENT_RECORDS_KEY).catch(() => ({}));
+  const records = stored?.[PLUS_CHECKOUT_BARK_SENT_RECORDS_KEY];
+  return records && typeof records === 'object' && !Array.isArray(records) ? records : {};
+}
+
+async function sendPlusCheckoutBarkNotificationIfNeeded(state = {}, payload = {}) {
+  const baseUrl = getPlusCheckoutBarkBaseUrl();
+  if (!baseUrl) {
+    return;
+  }
+
+  const email = getPlusCheckoutNotificationEmail(state, payload);
+  if (!email) {
+    await addLog('步骤 6：Bark 推送已跳过，未能确认当前登录邮箱。', 'warn', { nodeId: 'plus-checkout-create' });
+    return;
+  }
+
+  const recordKey = buildPlusCheckoutBarkRecordKey(state, payload, email);
+  const sentRecords = await getPlusCheckoutBarkSentRecords();
+  if (sentRecords[recordKey]?.ok) {
+    await addLog(`步骤 6：Bark 推送已发送过，跳过重复推送（${email}）。`, 'info', { nodeId: 'plus-checkout-create' });
+    return;
+  }
+
+  const message = `第六步已完成 / Plus Checkout 已创建：${email}`;
+  const requestUrl = `${baseUrl}/${encodeURIComponent(message)}`;
+  const response = await fetch(requestUrl, { method: 'GET' });
+  const rawText = await response.text().catch(() => '');
+  let data = null;
+  try {
+    data = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    data = null;
+  }
+  const barkCode = Number(data?.code);
+  const success = response.ok && (barkCode === 200 || data?.message === 'success');
+  if (!success) {
+    const detail = rawText.slice(0, 200) || `HTTP ${response.status}`;
+    throw new Error(`Bark 推送失败：${detail}`);
+  }
+
+  const nextRecords = {
+    ...sentRecords,
+    [recordKey]: {
+      ok: true,
+      email,
+      sentAt: Date.now(),
+      response: {
+        status: response.status,
+        code: barkCode || null,
+        message: String(data?.message || '').slice(0, 100),
+      },
+    },
+  };
+  await chrome.storage.local.set({ [PLUS_CHECKOUT_BARK_SENT_RECORDS_KEY]: nextRecords });
+  await addLog(`步骤 6：Bark 推送已发送（${email}）。`, 'ok', { nodeId: 'plus-checkout-create' });
+}
+
+async function runNodeCompletionNotifications(nodeId, payload = {}, latestState = {}) {
+  if (nodeId !== 'plus-checkout-create') {
+    return;
+  }
+  await sendPlusCheckoutBarkNotificationIfNeeded(latestState, payload);
+}
+
 async function completeNodeFromBackground(nodeId, payload = {}) {
   const normalizedNodeId = String(nodeId || '').trim();
   if (!normalizedNodeId) {
@@ -11302,6 +11517,11 @@ async function completeNodeFromBackground(nodeId, payload = {}) {
   const completionState = normalizedNodeId === lastNodeId ? latestState : null;
   await setNodeStatus(normalizedNodeId, 'completed');
   await addLog('已完成', 'ok', { nodeId: normalizedNodeId });
+  try {
+    await runNodeCompletionNotifications(normalizedNodeId, payload, latestState);
+  } catch (error) {
+    await addLog(`步骤 6：Bark 推送失败：${getErrorMessage(error)}`, 'warn', { nodeId: normalizedNodeId });
+  }
 
   if (normalizedNodeId === lastNodeId) {
     notifyNodeComplete(normalizedNodeId, payload);
@@ -14180,6 +14400,11 @@ const plusGpcPhoneStepRegistry = buildStepRegistry(PLUS_GPC_PHONE_STEP_DEFINITIO
 const plusGpcPhoneBoundEmailReloginStepRegistry = buildStepRegistry(PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS);
 const plusGpcSub2ApiSessionStepRegistry = buildStepRegistry(PLUS_GPC_SUB2API_SESSION_STEP_DEFINITIONS);
 const plusGpcCpaSessionStepRegistry = buildStepRegistry(PLUS_GPC_CPA_SESSION_STEP_DEFINITIONS);
+const plusSkipCheckoutStepRegistry = buildStepRegistry(PLUS_SKIP_CHECKOUT_STEP_DEFINITIONS);
+const plusSkipCheckoutPhoneStepRegistry = buildStepRegistry(PLUS_SKIP_CHECKOUT_PHONE_STEP_DEFINITIONS);
+const plusSkipCheckoutPhoneBoundEmailReloginStepRegistry = buildStepRegistry(PLUS_SKIP_CHECKOUT_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS);
+const plusSkipCheckoutSub2ApiSessionStepRegistry = buildStepRegistry(PLUS_SKIP_CHECKOUT_SUB2API_SESSION_STEP_DEFINITIONS);
+const plusSkipCheckoutCpaSessionStepRegistry = buildStepRegistry(PLUS_SKIP_CHECKOUT_CPA_SESSION_STEP_DEFINITIONS);
 const localCpaJsonNoRtStepRegistry = buildStepRegistry(LOCAL_CPA_JSON_NO_RT_STEP_DEFINITIONS);
 
 function getStepRegistryForState(state = {}) {
@@ -14203,6 +14428,18 @@ function getStepRegistryForState(state = {}) {
   const plusAccountAccessStrategy = signupMethod === SIGNUP_METHOD_PHONE
     ? PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH
     : normalizePlusAccountAccessStrategyForState(state);
+  if (paymentMethod === PLUS_PAYMENT_METHOD_SKIP_CHECKOUT) {
+    if (plusAccountAccessStrategy === PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION) {
+      return plusSkipCheckoutSub2ApiSessionStepRegistry;
+    }
+    if (plusAccountAccessStrategy === PLUS_ACCOUNT_ACCESS_STRATEGY_CPA_CODEX_SESSION) {
+      return plusSkipCheckoutCpaSessionStepRegistry;
+    }
+    if (signupMethod === SIGNUP_METHOD_PHONE) {
+      return useBoundEmailRelogin ? plusSkipCheckoutPhoneBoundEmailReloginStepRegistry : plusSkipCheckoutPhoneStepRegistry;
+    }
+    return plusSkipCheckoutStepRegistry;
+  }
   if (paymentMethod === PLUS_PAYMENT_METHOD_GPC_HELPER) {
     if (plusAccountAccessStrategy === PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION) {
       return plusGpcSub2ApiSessionStepRegistry;

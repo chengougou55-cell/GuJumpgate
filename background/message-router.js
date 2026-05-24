@@ -327,6 +327,9 @@
 
     function normalizePlusPaymentMethod(value = '') {
       const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'skip-checkout') {
+        return 'skip-checkout';
+      }
       if (normalized === 'gpc-helper') {
         return 'gpc-helper';
       }
@@ -649,6 +652,9 @@
 
     function normalizePlusPaymentMethodForDisplay(value = '') {
       const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'skip-checkout') {
+        return 'skip-checkout';
+      }
       if (normalized === 'gpc-helper') {
         return 'gpc-helper';
       }
@@ -659,6 +665,9 @@
       const method = normalizePlusPaymentMethodForDisplay(value);
       if (method === 'gpc-helper') {
         return 'GPC';
+      }
+      if (method === 'skip-checkout') {
+        return '跳过 Checkout';
       }
       return method === 'gopay' ? 'GoPay' : 'PayPal';
     }

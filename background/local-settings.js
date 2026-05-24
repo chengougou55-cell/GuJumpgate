@@ -1,0 +1,1 @@
+self.GuJumpgateLocalSettings = self.GuJumpgateLocalSettings || {};

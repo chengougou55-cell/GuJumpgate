@@ -1,7 +1,19 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
 require('../background/steps/create-plus-checkout.js');
+
+const repoRoot = path.resolve(__dirname, '..');
+const createPlusCheckoutSource = fs.readFileSync(
+  path.join(repoRoot, 'background/steps/create-plus-checkout.js'),
+  'utf8'
+);
+const paypalFlowSource = fs.readFileSync(
+  path.join(repoRoot, 'content/paypal-flow.js'),
+  'utf8'
+);
 
 function createExecutorWithPayload(payload) {
   return globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
@@ -154,4 +166,106 @@ test('hosted checkout sms pool accepts phone pipe url entries', async () => {
   assert.match(requestedUrl, /^https:\/\/sms\.699\.chat\/api\/get_sms\?key=251a4a4760a848ba4920cb179f589236&t=\d+$/);
   assert.equal(selectedEntry.phone, '5824441369');
   assert.equal(selectedEntry.verificationUrl, verificationUrl);
+});
+
+test('hosted PayPal no-SMS polling clicks resend exactly three times', async () => {
+  const logs = [];
+  const messages = [];
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    addLog: async (message, level) => logs.push({ message, level }),
+    enableTestHooks: true,
+    fetch: async () => ({
+      status: 200,
+      text: async () => JSON.stringify({ data: { sms: '' } }),
+    }),
+    getState: async () => ({
+      hostedCheckoutSmsPoolText: '+15824441369|http://example.test/api/get_sms?key=test',
+      hostedCheckoutSmsPoolUsage: {},
+    }),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    waitForTabCompleteUntilStopped: async () => {},
+    ensureContentScriptReadyOnTabUntilStopped: async () => {},
+    sendTabMessageUntilStopped: async (_tabId, _source, message = {}) => {
+      messages.push(message);
+      return { stage: 'verification', resendClicked: true };
+    },
+  });
+
+  await assert.rejects(
+    () => executor.__test.pollHostedCheckoutVerificationCodeWithResend(1),
+    /自动点击重新发送 3 次后仍未获取验证码/
+  );
+
+  const resendMessages = messages.filter((message) => message.payload?.resendVerificationCode);
+  assert.equal(resendMessages.length, 3);
+  assert.equal(logs.filter((log) => /正在点击 PayPal “重新发送”验证码/.test(log.message)).length, 3);
+});
+
+test('hosted PayPal polling does not resend on sms endpoint HTTP failure', async () => {
+  const messages = [];
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+    fetch: async () => ({
+      status: 500,
+      text: async () => JSON.stringify({ error: 'server error' }),
+    }),
+    getState: async () => ({
+      hostedCheckoutSmsPoolText: '+15824441369|http://example.test/api/get_sms?key=test',
+      hostedCheckoutSmsPoolUsage: {},
+    }),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    waitForTabCompleteUntilStopped: async () => {},
+    ensureContentScriptReadyOnTabUntilStopped: async () => {},
+    sendTabMessageUntilStopped: async (_tabId, _source, message = {}) => {
+      messages.push(message);
+      return { stage: 'verification', resendClicked: true };
+    },
+  });
+
+  await assert.rejects(
+    () => executor.__test.pollHostedCheckoutVerificationCodeWithResend(1),
+    /HTTP 500/
+  );
+
+  assert.equal(messages.filter((message) => message.payload?.resendVerificationCode).length, 0);
+});
+
+test('hosted PayPal no-SMS flow resends verification code up to three times', () => {
+  assert.match(
+    createPlusCheckoutSource,
+    /const HOSTED_CHECKOUT_VERIFICATION_NO_SMS_RESEND_MAX_ATTEMPTS = 3;/
+  );
+  assert.match(createPlusCheckoutSource, /enableTestHooks = false/);
+  assert.match(createPlusCheckoutSource, /\.\.\.\(enableTestHooks \? \{ __test: \{\s*pollHostedCheckoutVerificationCodeWithResend,\s*\} \} : \{\}\)/);
+  assert.match(createPlusCheckoutSource, /async function pollHostedCheckoutVerificationCodeWithResend\(tabId, options = \{\}\)/);
+  assert.match(createPlusCheckoutSource, /if \(isHostedCheckoutVerificationNoSmsError\(lastError\)\)/);
+  assert.match(createPlusCheckoutSource, /tracker\.noSmsResendAttempts \+= 1;/);
+  assert.match(createPlusCheckoutSource, /const hostedNoSmsResendTracker = \{ noSmsResendAttempts: 0 \};/);
+  assert.match(createPlusCheckoutSource, /isHostedCheckoutVerificationNoSmsError\(error\)/);
+  assert.match(createPlusCheckoutSource, /if \(!isHostedCheckoutVerificationNoSmsError\(error\)\) \{\s*throw error;\s*\}/);
+  assert.match(createPlusCheckoutSource, /hosted checkout 验证码接口请求失败（HTTP \$\{status\}）。/);
+  assert.match(createPlusCheckoutSource, /clickHostedCheckoutVerificationResend\(/);
+  assert.match(createPlusCheckoutSource, /resendVerificationCode: true/);
+  assert.match(createPlusCheckoutSource, /本轮轮询未收到 PayPal 短信验证码/);
+  assert.match(createPlusCheckoutSource, /const verificationCode = await pollHostedCheckoutVerificationCodeWithResend\(tabId, \{\s*tracker: hostedNoSmsResendTracker,\s*\}\);/);
+});
+
+test('PayPal HAR fixtures expose verification resend controls used by automation', () => {
+  const har03 = JSON.parse(fs.readFileSync(path.join(repoRoot, 'www.paypal.com03.har'), 'utf8'));
+  const har04 = JSON.parse(fs.readFileSync(path.join(repoRoot, 'www.paypal.com04.har'), 'utf8'));
+  const har04Text = har04.log.entries
+    .map((entry) => entry.response?.content?.text || '')
+    .join('\n');
+
+  assert.ok(
+    har03.log.entries.some((entry) => /geo\.ddc\.paypal\.com\/captcha/i.test(entry.request?.url || '')),
+    'HAR03 should capture the PayPal/DataDome captcha branch before the OTP page stabilizes'
+  );
+  assert.match(har04Text, /"resendButtonTitle":"重新发送"/);
+  assert.match(har04Text, /data-testid["']?:["']link-get-new-code|data-testid=["']link-get-new-code/);
+  assert.match(har04Text, /ci-ciBasic-0/);
+  assert.match(paypalFlowSource, /link-get-new-code/);
+  assert.match(paypalFlowSource, /#linkGetNewCode/);
 });

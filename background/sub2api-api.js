@@ -130,6 +130,9 @@
 
       const token = normalizeString(loginData?.access_token || loginData?.accessToken);
       if (!token) {
+        if (loginData?.requires_2fa || loginData?.requires2fa || loginData?.temp_token || loginData?.tempToken) {
+          throw new Error('SUB2API 登录需要 2FA/TOTP 动态验证码，当前自动流程无法仅凭邮箱和密码获取管理 token。请先关闭该账号的 2FA，或为 SUB2API 增加支持 2FA 的登录配置。');
+        }
         throw new Error('SUB2API 登录返回缺少 access_token。');
       }
 
