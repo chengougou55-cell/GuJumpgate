@@ -21,7 +21,7 @@
   const HOSTED_CHECKOUT_TRANSITION_TIMEOUT_MS = 120000;
   const HOSTED_CHECKOUT_SUCCESS_WAIT_TIMEOUT_MS = 180000;
   const HOSTED_CHECKOUT_PAYPAL_LOOP_TIMEOUT_MS = 10 * 60 * 1000;
-  const HOSTED_CHECKOUT_VERIFICATION_POLL_ATTEMPTS = 12;
+  const HOSTED_CHECKOUT_VERIFICATION_POLL_ATTEMPTS = 8;
   const HOSTED_CHECKOUT_VERIFICATION_POLL_INTERVAL_MS = 5000;
   const HOSTED_CHECKOUT_VERIFICATION_REQUEST_TIMEOUT_MS = 8000;
   const HOSTED_CHECKOUT_VERIFICATION_INVALID_RESEND_DELAY_MS = 3000;
@@ -1276,6 +1276,52 @@ function FindProxyForURL(url, host) {
       return candidates.find((number) => number !== previousNumber) || candidates[0];
     }
 
+    function buildHostedCheckoutFallbackReplacementCard(
+      previousNumber = '',
+      previousExpiry = '',
+      previousCvv = '',
+      excludedSignatures = new Set()
+    ) {
+      const numberSeeds = [
+        [4, 1, 4, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [4, 1, 4, 7, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [4, 1, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+      ];
+      const numbers = Array.from(new Set(numberSeeds.map((digits) => buildHostedCheckoutLuhnNumber(digits))))
+        .filter((number) => !previousNumber || number !== previousNumber);
+      const currentYear = new Date().getFullYear() % 100;
+      const expiries = [];
+      for (let yearOffset = 2; yearOffset <= 6; yearOffset += 1) {
+        for (let month = 1; month <= 12; month += 1) {
+          expiries.push(`${String(month).padStart(2, '0')} / ${String(currentYear + yearOffset).padStart(2, '0')}`);
+        }
+      }
+      const cvvs = Array.from({ length: 900 }, (_, index) => String(index + 100).padStart(3, '0'));
+      for (const number of numbers) {
+        for (const expiry of expiries) {
+          if (previousExpiry && expiry === previousExpiry) {
+            continue;
+          }
+          for (const cvv of cvvs) {
+            if (previousCvv && cvv === previousCvv) {
+              continue;
+            }
+            const signature = getHostedCheckoutCardFieldsSignature(number, expiry, cvv);
+            if (!excludedSignatures.has(signature)) {
+              return { number, expiry, cvv };
+            }
+          }
+        }
+      }
+
+      return {
+        number: buildHostedCheckoutFallbackVisaNumber(previousNumber),
+        expiry: `${String((new Date().getMonth() % 12) + 1).padStart(2, '0')} / ${String(currentYear + 7).padStart(2, '0')}`,
+        cvv: previousCvv === '999' ? '998' : '999',
+      };
+    }
+
     function buildHostedCheckoutVisaCard() {
       const month = String(Math.floor(Math.random() * 12) + 1).padStart(2, '0');
       const currentYear = new Date().getFullYear() % 100;
@@ -1292,16 +1338,26 @@ function FindProxyForURL(url, host) {
       return String(value || '').replace(/\s+/g, ' ').trim();
     }
 
-    function buildHostedCheckoutReplacementCard(previousCard = {}) {
+    function getHostedCheckoutCardFieldsSignature(cardNumber = '', cardExpiry = '', cardCvv = '') {
+      return [
+        String(cardNumber || '').replace(/\D+/g, ''),
+        normalizeHostedCheckoutCardField(cardExpiry || ''),
+        normalizeHostedCheckoutCardField(cardCvv || ''),
+      ].join('|');
+    }
+
+    function buildHostedCheckoutReplacementCard(previousCard = {}, excludedSignatures = new Set()) {
       const previousNumber = String(previousCard.cardNumber || previousCard.number || '').replace(/\D+/g, '');
       const previousExpiry = normalizeHostedCheckoutCardField(previousCard.cardExpiry || previousCard.expiry);
       const previousCvv = normalizeHostedCheckoutCardField(previousCard.cardCvv || previousCard.cvv);
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const card = buildHostedCheckoutVisaCard();
+        const signature = getHostedCheckoutCardFieldsSignature(card.number, card.expiry, card.cvv);
         if (
           (!previousNumber || card.number !== previousNumber)
           && (!previousExpiry || card.expiry !== previousExpiry)
           && (!previousCvv || card.cvv !== previousCvv)
+          && !excludedSignatures.has(signature)
         ) {
           return card;
         }
@@ -1319,6 +1375,14 @@ function FindProxyForURL(url, host) {
       }
       if (previousCvv && card.cvv === previousCvv) {
         card.cvv = String((((Number(card.cvv) || 100) - 99) % 900) + 100).padStart(3, '0');
+      }
+      if (excludedSignatures.has(getHostedCheckoutCardFieldsSignature(card.number, card.expiry, card.cvv))) {
+        return buildHostedCheckoutFallbackReplacementCard(
+          previousNumber,
+          previousExpiry,
+          previousCvv,
+          excludedSignatures
+        );
       }
       return card;
     }
@@ -1377,12 +1441,20 @@ function FindProxyForURL(url, host) {
       };
     }
 
-    function replaceHostedCheckoutGuestProfileCard(guestProfile = {}) {
-      const card = buildHostedCheckoutReplacementCard(guestProfile);
+    function replaceHostedCheckoutGuestProfileCard(guestProfile = {}, excludedSignatures = new Set()) {
+      const card = buildHostedCheckoutReplacementCard(guestProfile, excludedSignatures);
       guestProfile.cardNumber = card.number;
       guestProfile.cardExpiry = card.expiry;
       guestProfile.cardCvv = card.cvv;
       return card;
+    }
+
+    function getHostedCheckoutCardSignature(guestProfile = {}) {
+      return getHostedCheckoutCardFieldsSignature(
+        guestProfile.cardNumber,
+        guestProfile.cardExpiry,
+        guestProfile.cardCvv
+      );
     }
 
     function extractHostedCheckoutVerificationCode(payload = {}) {
@@ -1845,6 +1917,9 @@ function FindProxyForURL(url, host) {
       let hostedVerificationSubmitted = false;
       let loggedWaitingForHostedVerificationResult = false;
       let hostedCardReplacementAttempts = 0;
+      let lastSubmittedCardSignature = '';
+      let lastSubmittedCardAt = 0;
+      const attemptedCardSignatures = new Set();
       const hostedNoSmsResendTracker = { noSmsResendAttempts: 0 };
       while (Date.now() - startedAt < HOSTED_CHECKOUT_PAYPAL_LOOP_TIMEOUT_MS) {
         throwIfStopped();
@@ -1882,17 +1957,28 @@ function FindProxyForURL(url, host) {
         }
 
         const pageState = await getHostedCheckoutPayPalState(tabId);
-        if (pageState.hostedStage === 'generic_error' || pageState.hostedGenericError) {
-          await requestHostedCheckoutGenericErrorChoice(tabId, pageState);
-          return;
-        }
-
-        if (pageState.hostedStage === 'guest_checkout' && pageState.hostedCardDeclined) {
+        const currentCardSignature = getHostedCheckoutCardSignature(guestProfile);
+        if (
+          pageState.hostedCardDeclined
+          && pageState.hostedGuestCheckoutFormVisible
+          && !pageState.verificationInputsVisible
+        ) {
+          if (
+            lastSubmittedCardSignature === currentCardSignature
+            && Date.now() - lastSubmittedCardAt < HOSTED_CHECKOUT_VERIFICATION_REQUEST_TIMEOUT_MS
+          ) {
+            await addLog('步骤 6：PayPal 拒卡提示仍在页面上，刚提交新卡后短暂等待页面刷新，避免重复更换同一轮卡资料。', 'info');
+            await sleepWithStop(1000);
+            continue;
+          }
           if (hostedCardReplacementAttempts >= HOSTED_CHECKOUT_CARD_DECLINE_MAX_REPLACEMENTS) {
             throw new Error(`步骤 6：PayPal 提示无法添加当前卡，已更换 ${HOSTED_CHECKOUT_CARD_DECLINE_MAX_REPLACEMENTS} 次卡号/有效期/CVV 后仍失败。`);
           }
           hostedCardReplacementAttempts += 1;
-          const card = replaceHostedCheckoutGuestProfileCard(guestProfile);
+          attemptedCardSignatures.add(currentCardSignature);
+          const card = replaceHostedCheckoutGuestProfileCard(guestProfile, attemptedCardSignatures);
+          lastSubmittedCardSignature = getHostedCheckoutCardSignature(guestProfile);
+          attemptedCardSignatures.add(lastSubmittedCardSignature);
           hostedVerificationSubmitted = false;
           loggedWaitingForHostedVerificationResult = false;
           await addLog(
@@ -1906,8 +1992,14 @@ function FindProxyForURL(url, host) {
             ...guestProfile,
             phone: String(runtimeConfig?.phone || guestProfile.phone || '').trim(),
           });
+          lastSubmittedCardAt = Date.now();
           await sleepWithStop(1500);
           continue;
+        }
+
+        if (pageState.hostedStage === 'generic_error' || pageState.hostedGenericError) {
+          await requestHostedCheckoutGenericErrorChoice(tabId, pageState);
+          return;
         }
 
         if (
@@ -1993,10 +2085,13 @@ function FindProxyForURL(url, host) {
             address: guestProfile.address || {},
           })}`, 'info');
           await addLog('步骤 6：检测到 PayPal hosted checkout 卡支付页，正在填写卡资料并提交...', 'info');
+          lastSubmittedCardSignature = getHostedCheckoutCardSignature(guestProfile);
+          attemptedCardSignatures.add(lastSubmittedCardSignature);
           await runHostedCheckoutPayPalStep(tabId, {
             ...guestProfile,
             phone: String(runtimeConfig?.phone || guestProfile.phone || '').trim(),
           });
+          lastSubmittedCardAt = Date.now();
           await sleepWithStop(1500);
           continue;
         }

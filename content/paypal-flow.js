@@ -269,12 +269,7 @@ function findHostedAccountCreateEmailContinueButton() {
 function isPayPalHostedAccountCreateEmailPage() {
   const bodyText = normalizeText(document.body?.innerText || '');
   const emailInput = document.getElementById('email') || findEmailInput();
-  const hasCardOrAddressForm = Boolean(
-    document.getElementById('cardNumber')
-    || document.getElementById('billingLine1')
-    || document.getElementById('cardExpiry')
-    || document.getElementById('cardCvv')
-  );
+  const hasCardOrAddressForm = hasPayPalHostedGuestCheckoutForm();
   return Boolean(emailInput)
     && !findPasswordInput()
     && !hasCardOrAddressForm
@@ -285,11 +280,15 @@ function isPayPalHostedAccountCreateEmailPage() {
     );
 }
 
+function hasPayPalHostedGuestCheckoutForm() {
+  return ['cardNumber', 'billingLine1', 'cardExpiry', 'cardCvv']
+    .some((id) => isVisibleElement(document.getElementById(id)));
+}
+
 function isPayPalHostedGuestCheckoutPage() {
   const pathname = getPayPalHostedPathname();
-  return /\/checkoutweb\//i.test(pathname)
-    || Boolean(document.getElementById('cardNumber'))
-    || Boolean(document.getElementById('billingLine1'));
+  return hasPayPalHostedGuestCheckoutForm()
+    || (/\/checkoutweb\//i.test(pathname) && !/\/checkoutweb\/genericError/i.test(pathname));
 }
 
 function getPayPalHostedGenericErrorMessage() {
@@ -303,7 +302,7 @@ function getPayPalHostedGenericErrorMessage() {
 function getPayPalHostedCardDeclinedMessage() {
   const bodyText = normalizeText(document.body?.innerText || '');
   const match = bodyText.match(
-    /We\s+weren[’']?t\s+able\s+to\s+add\s+this\s+card[\s\S]{0,180}?(?:try\s+again|different\s+card)|try\s+a\s+different\s+card|无法添加(?:这|此)?张?卡|换(?:一张|其他)卡/i
+    /We\s+weren[’']?t\s+able\s+to\s+add\s+this\s+card[\s\S]{0,220}?(?:try\s+again|try\s+a\s+different\s+card|different\s+card)|Check\s+all\s+the\s+details\s+are\s+correct[\s\S]{0,160}?try\s+a\s+different\s+card|无法添加(?:这|此|该)?张?卡|无法添加(?:这|此|该)?付款卡|不能添加(?:这|此|该)?张?卡|请检查[\s\S]{0,80}?(?:换|尝试)[\s\S]{0,40}?卡/i
   );
   return match ? normalizeText(match[0]) : '';
 }
@@ -1497,6 +1496,8 @@ function inspectPayPalState() {
   const approveButton = findApproveButton();
   const loginPhase = getPayPalLoginPhase(emailInput, passwordInput);
   const hostedStage = detectPayPalHostedCheckoutStage();
+  const hasHostedGuestCheckout = isPayPalHostedGuestCheckoutPage();
+  const hostedGuestCheckoutFormVisible = hasPayPalHostedGuestCheckoutForm();
   return {
     url: location.href,
     readyState: document.readyState,
@@ -1507,7 +1508,8 @@ function inspectPayPalState() {
     hasPasswordInput: Boolean(passwordInput),
     hostedAccountCreateEmail: hostedStage === PAYPAL_HOSTED_STAGE_ACCOUNT_CREATE_EMAIL,
     hostedAccountCreateEmailContinueReady: Boolean(findHostedAccountCreateEmailContinueButton()),
-    hasHostedGuestCheckout: hostedStage === PAYPAL_HOSTED_STAGE_GUEST_CHECKOUT,
+    hasHostedGuestCheckout,
+    hostedGuestCheckoutFormVisible,
     hostedCardDeclined: hasPayPalHostedCardDeclinedError(),
     hostedCardDeclinedMessage: getPayPalHostedCardDeclinedMessage(),
     hostedGenericError: hostedStage === PAYPAL_HOSTED_STAGE_GENERIC_ERROR,

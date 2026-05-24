@@ -287,13 +287,30 @@ test('hosted PayPal card decline replaces number expiry and cvv together', () =>
   }
 
   assert.match(createPlusCheckoutSource, /const HOSTED_CHECKOUT_CARD_DECLINE_MAX_REPLACEMENTS = 3;/);
-  assert.match(createPlusCheckoutSource, /function buildHostedCheckoutReplacementCard\(previousCard = \{\}\)/);
+  assert.match(createPlusCheckoutSource, /function buildHostedCheckoutReplacementCard\(previousCard = \{\}, excludedSignatures = new Set\(\)\)/);
   assert.match(createPlusCheckoutSource, /buildHostedCheckoutReplacementCard,/);
+  assert.match(createPlusCheckoutSource, /const signature = getHostedCheckoutCardFieldsSignature\(card\.number, card\.expiry, card\.cvv\);/);
+  assert.match(createPlusCheckoutSource, /!excludedSignatures\.has\(signature\)/);
+  assert.match(createPlusCheckoutSource, /function buildHostedCheckoutFallbackReplacementCard\(/);
+  assert.match(createPlusCheckoutSource, /return buildHostedCheckoutFallbackReplacementCard\(/);
   assert.match(createPlusCheckoutSource, /card\.number !== previousNumber/);
   assert.match(createPlusCheckoutSource, /card\.expiry !== previousExpiry/);
   assert.match(createPlusCheckoutSource, /card\.cvv !== previousCvv/);
-  assert.match(createPlusCheckoutSource, /replaceHostedCheckoutGuestProfileCard\(guestProfile\)/);
+  assert.match(createPlusCheckoutSource, /replaceHostedCheckoutGuestProfileCard\(guestProfile, attemptedCardSignatures\)/);
+  assert.match(createPlusCheckoutSource, /const attemptedCardSignatures = new Set\(\);/);
+  assert.match(createPlusCheckoutSource, /attemptedCardSignatures\.add\(currentCardSignature\);/);
+  assert.match(createPlusCheckoutSource, /attemptedCardSignatures\.add\(lastSubmittedCardSignature\);/);
+  assert.match(createPlusCheckoutSource, /function getHostedCheckoutCardSignature\(guestProfile = \{\}\)/);
+  assert.match(createPlusCheckoutSource, /pageState\.hostedCardDeclined\s*&& pageState\.hostedGuestCheckoutFormVisible\s*&& !pageState\.verificationInputsVisible/);
+  assert.match(createPlusCheckoutSource, /lastSubmittedCardSignature === currentCardSignature/);
+  assert.match(createPlusCheckoutSource, /刚提交新卡后短暂等待页面刷新/);
+  assert.match(createPlusCheckoutSource, /lastSubmittedCardAt = Date\.now\(\);/);
   assert.match(createPlusCheckoutSource, /PayPal 提示 We weren.t able to add this card，正在更换卡号\/有效期\/CVV/);
   assert.match(paypalFlowSource, /getPayPalHostedCardDeclinedMessage/);
+  assert.doesNotMatch(paypalFlowSource, /\)\|try\\s\+a\\s\+different\\s\+card\|/);
+  assert.match(paypalFlowSource, /Check\\s\+all\\s\+the\\s\+details\\s\+are\\s\+correct/);
+  assert.match(paypalFlowSource, /const hasHostedGuestCheckout = isPayPalHostedGuestCheckoutPage\(\);/);
+  assert.match(paypalFlowSource, /function hasPayPalHostedGuestCheckoutForm\(\)/);
+  assert.match(paypalFlowSource, /hostedGuestCheckoutFormVisible/);
   assert.match(paypalFlowSource, /hostedCardDeclined: hasPayPalHostedCardDeclinedError\(\)/);
 });
