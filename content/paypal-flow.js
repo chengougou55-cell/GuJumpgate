@@ -300,6 +300,18 @@ function getPayPalHostedGenericErrorMessage() {
   return match ? match[0] : '';
 }
 
+function getPayPalHostedCardDeclinedMessage() {
+  const bodyText = normalizeText(document.body?.innerText || '');
+  const match = bodyText.match(
+    /We\s+weren[’']?t\s+able\s+to\s+add\s+this\s+card[\s\S]{0,180}?(?:try\s+again|different\s+card)|try\s+a\s+different\s+card|无法添加(?:这|此)?张?卡|换(?:一张|其他)卡/i
+  );
+  return match ? normalizeText(match[0]) : '';
+}
+
+function hasPayPalHostedCardDeclinedError() {
+  return Boolean(getPayPalHostedCardDeclinedMessage());
+}
+
 function isPayPalHostedGenericErrorPage() {
   const pathname = getPayPalHostedPathname();
   const bodyText = normalizeText(document.body?.innerText || '');
@@ -1496,6 +1508,8 @@ function inspectPayPalState() {
     hostedAccountCreateEmail: hostedStage === PAYPAL_HOSTED_STAGE_ACCOUNT_CREATE_EMAIL,
     hostedAccountCreateEmailContinueReady: Boolean(findHostedAccountCreateEmailContinueButton()),
     hasHostedGuestCheckout: hostedStage === PAYPAL_HOSTED_STAGE_GUEST_CHECKOUT,
+    hostedCardDeclined: hasPayPalHostedCardDeclinedError(),
+    hostedCardDeclinedMessage: getPayPalHostedCardDeclinedMessage(),
     hostedGenericError: hostedStage === PAYPAL_HOSTED_STAGE_GENERIC_ERROR,
     hostedGenericErrorMessage: getPayPalHostedGenericErrorMessage(),
     verificationInputsVisible: hasHostedVerificationInputs(),

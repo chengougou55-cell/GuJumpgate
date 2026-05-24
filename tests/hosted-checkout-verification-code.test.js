@@ -238,7 +238,7 @@ test('hosted PayPal no-SMS flow resends verification code up to three times', ()
     /const HOSTED_CHECKOUT_VERIFICATION_NO_SMS_RESEND_MAX_ATTEMPTS = 3;/
   );
   assert.match(createPlusCheckoutSource, /enableTestHooks = false/);
-  assert.match(createPlusCheckoutSource, /\.\.\.\(enableTestHooks \? \{ __test: \{\s*pollHostedCheckoutVerificationCodeWithResend,\s*\} \} : \{\}\)/);
+  assert.match(createPlusCheckoutSource, /\.\.\.\(enableTestHooks \? \{ __test: \{\s*buildHostedCheckoutReplacementCard,\s*pollHostedCheckoutVerificationCodeWithResend,\s*\} \} : \{\}\)/);
   assert.match(createPlusCheckoutSource, /async function pollHostedCheckoutVerificationCodeWithResend\(tabId, options = \{\}\)/);
   assert.match(createPlusCheckoutSource, /if \(isHostedCheckoutVerificationNoSmsError\(lastError\)\)/);
   assert.match(createPlusCheckoutSource, /tracker\.noSmsResendAttempts \+= 1;/);
@@ -268,4 +268,32 @@ test('PayPal HAR fixtures expose verification resend controls used by automation
   assert.match(har04Text, /ci-ciBasic-0/);
   assert.match(paypalFlowSource, /link-get-new-code/);
   assert.match(paypalFlowSource, /#linkGetNewCode/);
+});
+
+test('hosted PayPal card decline replaces number expiry and cvv together', () => {
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+  });
+  const previousCard = {
+    cardNumber: '4147525524970946',
+    cardExpiry: '04 / 28',
+    cardCvv: '566',
+  };
+  for (let index = 0; index < 50; index += 1) {
+    const card = executor.__test.buildHostedCheckoutReplacementCard(previousCard);
+    assert.notEqual(card.number, previousCard.cardNumber);
+    assert.notEqual(card.expiry, previousCard.cardExpiry);
+    assert.notEqual(card.cvv, previousCard.cardCvv);
+  }
+
+  assert.match(createPlusCheckoutSource, /const HOSTED_CHECKOUT_CARD_DECLINE_MAX_REPLACEMENTS = 3;/);
+  assert.match(createPlusCheckoutSource, /function buildHostedCheckoutReplacementCard\(previousCard = \{\}\)/);
+  assert.match(createPlusCheckoutSource, /buildHostedCheckoutReplacementCard,/);
+  assert.match(createPlusCheckoutSource, /card\.number !== previousNumber/);
+  assert.match(createPlusCheckoutSource, /card\.expiry !== previousExpiry/);
+  assert.match(createPlusCheckoutSource, /card\.cvv !== previousCvv/);
+  assert.match(createPlusCheckoutSource, /replaceHostedCheckoutGuestProfileCard\(guestProfile\)/);
+  assert.match(createPlusCheckoutSource, /PayPal 提示 We weren.t able to add this card，正在更换卡号\/有效期\/CVV/);
+  assert.match(paypalFlowSource, /getPayPalHostedCardDeclinedMessage/);
+  assert.match(paypalFlowSource, /hostedCardDeclined: hasPayPalHostedCardDeclinedError\(\)/);
 });
