@@ -2489,6 +2489,22 @@ function FindProxyForURL(url, host) {
       return sessionState.accessToken;
     }
 
+    function normalizeDirectCheckoutAccessToken(value = '') {
+      return String(value || '').trim();
+    }
+
+    function getDirectCheckoutAccessToken(state = {}) {
+      if (!state?.xiaohongshuModeEnabled) {
+        return '';
+      }
+      return normalizeDirectCheckoutAccessToken(
+        state?.xiaohongshuAccessToken
+        || state?.directCheckoutAccessToken
+        || state?.manualCheckoutAccessToken
+        || ''
+      );
+    }
+
     async function generateCloudCheckoutFromApi(accessToken = '', paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL, state = {}) {
       const token = String(accessToken || '').trim();
       if (!token) {
@@ -2708,6 +2724,7 @@ function FindProxyForURL(url, host) {
         await executeGpcCheckoutCreate(state);
         return;
       }
+      const directAccessToken = getDirectCheckoutAccessToken(state);
       await clearHostedCheckoutCurrentSmsEntry();
       let checkoutScopedProxySnapshot = null;
       try {
@@ -2715,22 +2732,37 @@ function FindProxyForURL(url, host) {
 
         const paymentMethodLabel = getPlusPaymentMethodLabel(paymentMethod);
         const checkoutModeLabel = getCheckoutModeLabel(state);
-        await addLog(`步骤 6：正在打开新的 ChatGPT 会话，准备创建${checkoutModeLabel}...`, 'info');
+        await addLog(
+          directAccessToken
+            ? `步骤 6：小红书模式已接收 accessToken，准备直接创建${checkoutModeLabel}长链...`
+            : `步骤 6：正在打开新的 ChatGPT 会话，准备创建${checkoutModeLabel}...`,
+          'info'
+        );
         const tabId = await openFreshChatGptTabForCheckoutCreate();
 
         await waitForTabCompleteUntilStopped(tabId);
         await sleepWithStop(1000);
-        await ensureContentScriptReadyOnTabUntilStopped(PLUS_CHECKOUT_SOURCE, tabId, {
-          inject: PLUS_CHECKOUT_INJECT_FILES,
-          injectSource: PLUS_CHECKOUT_SOURCE,
-          logMessage: '步骤 6：正在等待 ChatGPT 页面完成加载，再继续创建订阅页...',
-        });
+        if (!directAccessToken) {
+          await ensureContentScriptReadyOnTabUntilStopped(PLUS_CHECKOUT_SOURCE, tabId, {
+            inject: PLUS_CHECKOUT_INJECT_FILES,
+            injectSource: PLUS_CHECKOUT_SOURCE,
+            logMessage: '步骤 6：正在等待 ChatGPT 页面完成加载，再继续创建订阅页...',
+          });
+        }
 
-        const useCloudCheckoutConversion = isPlusCheckoutCloudConversionEnabled(state, paymentMethod);
+        const useCloudCheckoutConversion = Boolean(directAccessToken)
+          || isPlusCheckoutCloudConversionEnabled(state, paymentMethod);
         let result = null;
         if (useCloudCheckoutConversion) {
-          await addLog('步骤 6：已启用云端支付转换，正在读取 accessToken 并请求云端服务生成订阅链接...', 'info');
-          const sessionState = await readChatGptSessionFromTab(tabId);
+          await addLog(
+            directAccessToken
+              ? '步骤 6：小红书模式正在请求云端服务生成订阅长链...'
+              : '步骤 6：已启用云端支付转换，正在读取 accessToken 并请求云端服务生成订阅链接...',
+            'info'
+          );
+          const sessionState = directAccessToken
+            ? { accessToken: directAccessToken, sessionEmail: normalizeEmailForNotification(state?.chatgptEmail || state?.email || state?.accountIdentifier || '') }
+            : await readChatGptSessionFromTab(tabId);
           const accessToken = sessionState.accessToken;
           const sessionEmail = sessionState.sessionEmail;
           if (!accessToken) {
@@ -2828,6 +2860,14 @@ function FindProxyForURL(url, host) {
           checkoutSessionId: result.checkoutSessionId,
           chatgptEmail: result.sessionEmail,
         });
+        return {
+          plusCheckoutUrl: finalCheckoutUrl,
+          checkoutSessionId: result.checkoutSessionId,
+          plusCheckoutCountry: result.country || 'DE',
+          plusCheckoutCurrency: result.currency || 'EUR',
+          plusCheckoutSource: result.checkoutSource,
+          chatgptEmail: result.sessionEmail,
+        };
       } finally {
         if (checkoutScopedProxySnapshot?.applied) {
           try {

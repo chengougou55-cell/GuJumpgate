@@ -35,6 +35,8 @@
         'sub2apiSessionId',
         'sub2apiOAuthState',
         'sub2apiGroupId',
+        'sub2apiGroupName',
+        'sub2apiGroupNames',
         'sub2apiDraftName',
         'sub2apiProxyId',
         'sub2apiGroupIds',
@@ -123,6 +125,12 @@
         'lastSignupCode',
         'lastLoginCode',
         'step8VerificationTargetEmail',
+        'xiaohongshuModeEnabled',
+        'accessToken',
+        'chatgptAccessToken',
+        'xiaohongshuAccessToken',
+        'directCheckoutAccessToken',
+        'manualCheckoutAccessToken',
       ]),
     });
 

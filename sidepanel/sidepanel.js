@@ -1448,6 +1448,7 @@ function shouldAttachAutomationWindow(message = {}) {
   return [
     'EXECUTE_NODE',
     'AUTO_RUN',
+    'AUTO_RUN_XIAOHONGSHU',
     'SCHEDULE_AUTO_RUN',
     'RESUME_AUTO_RUN',
     'START_SCHEDULED_AUTO_RUN_NOW',
@@ -1476,6 +1477,7 @@ async function sendSidepanelMessage(message = {}) {
 
 window.sendSidepanelMessage = sendSidepanelMessage;
 
+const XIAOHONGSHU_SUB2API_GROUP_NAME = 'xiaohongshu';
 const DEFAULT_SUB2API_GROUP_OPTIONS = ['codex', 'openai-plus'];
 const editableListPickerModule = window.SidepanelEditableListPicker || {};
 const normalizeEditableListValues = editableListPickerModule.normalizeEditableListValues
@@ -1509,8 +1511,13 @@ const createEditableListPicker = editableListPickerModule.createEditableListPick
 const closeEditableListPickers = editableListPickerModule.closeEditableListPickers || (() => { });
 const isClickInsideEditableListPicker = editableListPickerModule.isClickInsideEditableListPicker || (() => false);
 
+function isXiaohongshuSub2ApiGroupName(value = '') {
+  return String(value || '').trim().toLowerCase() === XIAOHONGSHU_SUB2API_GROUP_NAME;
+}
+
 function normalizeSub2ApiGroupOptions(...sources) {
-  return normalizeEditableListValues(...sources);
+  return normalizeEditableListValues(...sources)
+    .filter((name) => !isXiaohongshuSub2ApiGroupName(name));
 }
 
 function normalizeSub2ApiAccountPriorityValue(value) {
@@ -1584,13 +1591,18 @@ function renderSub2ApiGroupOptions(state = latestState, selectedValue = '') {
   const selected = String(selectedValue || state?.sub2apiGroupName || '').trim();
   const options = getSub2ApiGroupOptionsState({
     ...(state || {}),
-    sub2apiGroupName: selected || state?.sub2apiGroupName,
+    sub2apiGroupName: isXiaohongshuSub2ApiGroupName(selected)
+      ? ''
+      : (selected || state?.sub2apiGroupName),
   });
-  if (selected && !options.some((name) => name.toLowerCase() === selected.toLowerCase())) {
+  if (selected && !isXiaohongshuSub2ApiGroupName(selected) && !options.some((name) => name.toLowerCase() === selected.toLowerCase())) {
     options.unshift(selected);
   }
 
-  sub2ApiGroupPicker.render(options, selected || options[0] || DEFAULT_SUB2API_GROUP_OPTIONS[0]);
+  sub2ApiGroupPicker.render(
+    options,
+    isXiaohongshuSub2ApiGroupName(selected) ? (options[0] || DEFAULT_SUB2API_GROUP_OPTIONS[0]) : (selected || options[0] || DEFAULT_SUB2API_GROUP_OPTIONS[0])
+  );
 }
 let customEmailPoolEntriesState = [];
 
@@ -2014,6 +2026,18 @@ function openAutoStartChoiceDialog(startStep, options = {}) {
       { id: null, label: '取消', variant: 'btn-ghost' },
       { id: 'restart', label: '重新开始', variant: 'btn-outline' },
       { id: 'continue', label: '继续当前', variant: 'btn-primary' },
+    ],
+  });
+}
+
+function openAutoRunModeDialog() {
+  return openActionModal({
+    title: '选择自动模式',
+    message: '普通模式会按完整注册流程执行。小红书模式会跳过前置注册/登录，通过 accessToken 从创建 Plus Checkout 开始，成功后继续执行后续导入 SESSION 节点。',
+    actions: [
+      { id: null, label: '取消', variant: 'btn-ghost' },
+      { id: 'xiaohongshu', label: '小红书模式', variant: 'btn-outline' },
+      { id: 'normal', label: '普通模式', variant: 'btn-primary' },
     ],
   });
 }
@@ -12221,6 +12245,9 @@ async function handleAddSub2ApiGroup() {
         requiredMessage: '请先填写 SUB2API 分组名称。',
         validate: (value) => {
           const names = normalizeSub2ApiGroupOptions(value);
+          if (String(value || '').split(/[\r\n,，、]+/).some(isXiaohongshuSub2ApiGroupName)) {
+            return 'xiaohongshu 是小红书模式专用分组，普通模式不能添加。';
+          }
           return names.length ? '' : '请先填写 SUB2API 分组名称。';
         },
       },
@@ -14078,9 +14105,141 @@ async function startAutoRunFromCurrentSettings() {
   return true;
 }
 
+function extractAccessTokenFromInput(value = '') {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  try {
+    const parsed = JSON.parse(text);
+    const candidates = [
+      parsed?.accessToken,
+      parsed?.access_token,
+      parsed?.token,
+      parsed?.session?.accessToken,
+      parsed?.session?.access_token,
+      parsed?.data?.accessToken,
+      parsed?.data?.access_token,
+    ];
+    const match = candidates.map((candidate) => String(candidate || '').trim()).find(Boolean);
+    if (match) {
+      return match;
+    }
+  } catch {
+    // Plain token input is accepted below.
+  }
+  const match = text.match(/"accessToken"\s*:\s*"([^"]+)"/i)
+    || text.match(/"access_token"\s*:\s*"([^"]+)"/i);
+  if (match?.[1]) {
+    return String(match[1] || '').trim();
+  }
+  return text.replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '').trim();
+}
+
+async function openXiaohongshuAccessTokenDialog() {
+  if (!sharedFormDialog?.open) {
+    const fallback = window.prompt?.('粘贴 /api/auth/session 返回里的 accessToken') || '';
+    return extractAccessTokenFromInput(fallback);
+  }
+  const result = await sharedFormDialog.open({
+    title: '小红书模式',
+    message: '粘贴 /api/auth/session 返回里的 accessToken，也可以直接粘贴完整 JSON。',
+    alert: {
+      text: 'accessToken 属于敏感凭据，只会用于本次创建长链和后续 SESSION 导入。',
+      tone: 'info',
+    },
+    confirmLabel: '开始',
+    fields: [{
+      key: 'accessToken',
+      label: 'accessToken',
+      type: 'textarea',
+      rows: 5,
+      required: true,
+      requiredMessage: '请先粘贴 accessToken。',
+      placeholder: '粘贴 accessToken 或 /api/auth/session 返回 JSON',
+      autocomplete: 'off',
+      validate: (value) => extractAccessTokenFromInput(value) ? '' : '未识别到有效 accessToken。',
+    }],
+  });
+  if (!result) {
+    return '';
+  }
+  return extractAccessTokenFromInput(result.accessToken);
+}
+
+async function startXiaohongshuAutoRunFromCurrentSettings() {
+  registerPendingAutoRunStartRunCount(1);
+
+  try {
+    await refreshContributionContentHint();
+  } catch (error) {
+    console.warn('Failed to refresh contribution content hint before xiaohongshu auto run:', error);
+  }
+
+  if (typeof persistCurrentSettingsForAction === 'function') {
+    await persistCurrentSettingsForAction();
+  }
+
+  const plusModeEnabled = typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
+    ? Boolean(inputPlusModeEnabled.checked)
+    : Boolean(latestState?.plusModeEnabled);
+  if (!plusModeEnabled) {
+    clearPendingAutoRunStartRunCount();
+    throw new Error('小红书模式需要先开启 Plus 模式。');
+  }
+
+  const cloudCheckoutValidation = validatePlusCheckoutCloudConversionConfig({ focusOnError: true, force: true });
+  if (!cloudCheckoutValidation.valid) {
+    clearPendingAutoRunStartRunCount();
+    throw new Error(cloudCheckoutValidation.message || '云端支付转换配置不完整。');
+  }
+
+  const accessToken = await openXiaohongshuAccessTokenDialog();
+  if (!accessToken) {
+    clearPendingAutoRunStartRunCount();
+    return false;
+  }
+
+  const autoRunSkipFailures = inputAutoSkipFailures.checked;
+  const autoRunRetryNonFreeTrial = Boolean(inputAutoRunRetryNonFreeTrial?.checked);
+  const autoRunRetryPaypalCallback = Boolean(inputAutoRunRetryPaypalCallback?.checked);
+  const contributionNickname = String(inputContributionNickname?.value || '').trim();
+  const contributionQq = String(inputContributionQq?.value || '').trim();
+
+  btnAutoRun.disabled = true;
+  inputRunCount.disabled = true;
+  btnAutoRun.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 小红书模式...';
+  const response = await sendSidepanelMessage({
+    type: 'AUTO_RUN_XIAOHONGSHU',
+    source: 'sidepanel',
+    payload: {
+      accessToken,
+      autoRunSkipFailures,
+      autoRunRetryNonFreeTrial,
+      autoRunRetryPaypalCallback,
+      contributionMode: Boolean(latestState?.contributionMode),
+      contributionNickname,
+      contributionQq,
+    },
+  });
+  if (response?.error) {
+    clearPendingAutoRunStartRunCount();
+    throw new Error(response.error);
+  }
+  return true;
+}
+
 // Auto Run
 btnAutoRun.addEventListener('click', async () => {
   try {
+    const mode = await openAutoRunModeDialog();
+    if (!mode) {
+      return;
+    }
+    if (mode === 'xiaohongshu') {
+      await startXiaohongshuAutoRunFromCurrentSettings();
+      return;
+    }
     await startAutoRunFromCurrentSettings();
   } catch (err) {
     clearPendingAutoRunStartRunCount();
@@ -15048,6 +15207,10 @@ inputSub2ApiPassword.addEventListener('blur', () => {
 });
 
 inputSub2ApiGroup.addEventListener('change', () => {
+  if (isXiaohongshuSub2ApiGroupName(getSelectedSub2ApiGroupName())) {
+    renderSub2ApiGroupOptions(latestState, DEFAULT_SUB2API_GROUP_OPTIONS[0]);
+    showToast('xiaohongshu 是小红书模式专用分组，普通模式不能选择。', 'warn', 2000);
+  }
   syncLatestState({
     sub2apiGroupName: getSelectedSub2ApiGroupName(),
     sub2apiGroupNames: normalizeSub2ApiGroupOptions(
@@ -15808,7 +15971,7 @@ function validatePlusCheckoutCloudConversionConfig(options = {}) {
       ? selectPlusPaymentMethod.value
       : latestState?.plusPaymentMethod
   );
-  if (method !== DEFAULT_PLUS_PAYMENT_METHOD || !isPlusCheckoutCloudConversionEnabled()) {
+  if (!options?.force && (method !== DEFAULT_PLUS_PAYMENT_METHOD || !isPlusCheckoutCloudConversionEnabled())) {
     return { valid: true, message: '' };
   }
 

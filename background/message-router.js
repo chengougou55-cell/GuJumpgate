@@ -344,6 +344,91 @@
       return normalizePlusPaymentMethod(state?.plusPaymentMethod) === 'paypal';
     }
 
+    function resolveXiaohongshuAccessToken(payload = {}) {
+      return String(
+        payload?.accessToken
+        || payload?.xiaohongshuAccessToken
+        || payload?.directCheckoutAccessToken
+        || ''
+      ).trim();
+    }
+
+    function buildXiaohongshuNodeStatuses(state = {}, startNodeId = 'plus-checkout-create') {
+      const nodeIds = typeof getNodeIdsForState === 'function' ? getNodeIdsForState(state) : [];
+      const startIndex = Array.isArray(nodeIds) ? nodeIds.indexOf(startNodeId) : -1;
+      if (startIndex < 0) {
+        throw new Error('当前流程中未找到 Plus Checkout 创建节点，无法启动小红书模式。');
+      }
+      return Object.fromEntries(nodeIds.map((nodeId, index) => [
+        nodeId,
+        index < startIndex ? 'skipped' : 'pending',
+      ]));
+    }
+
+    function isXiaohongshuSub2ApiGroupName(value = '') {
+      return String(value || '').trim().toLowerCase() === 'xiaohongshu';
+    }
+
+    function normalizePublicSub2ApiGroupNames(value = '') {
+      const source = Array.isArray(value)
+        ? value
+        : String(value || '').split(/[\r\n,，、;；]+/);
+      const names = [];
+      const seen = new Set();
+      for (const item of source) {
+        const name = String(item || '').trim();
+        const key = name.toLowerCase();
+        if (!key || key === 'xiaohongshu' || seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        names.push(name);
+      }
+      return names;
+    }
+
+    function hasXiaohongshuRuntimeResidue(state = {}) {
+      const rawGroupNames = Array.isArray(state?.sub2apiGroupNames)
+        ? state.sub2apiGroupNames
+        : String(state?.sub2apiGroupNames || '').split(/[\r\n,，、;；]+/);
+      const hasXiaohongshuGroup = isXiaohongshuSub2ApiGroupName(state?.sub2apiGroupName)
+        || rawGroupNames.some((item) => isXiaohongshuSub2ApiGroupName(item));
+      return Boolean(
+        state?.xiaohongshuModeEnabled
+        || hasXiaohongshuGroup
+        || String(state?.xiaohongshuAccessToken || '').trim()
+        || String(state?.directCheckoutAccessToken || '').trim()
+        || String(state?.manualCheckoutAccessToken || '').trim()
+        || String(state?.plusCheckoutSource || '').trim().toLowerCase() === 'xiaohongshu'
+      );
+    }
+
+    function buildXiaohongshuRuntimeReset(state = {}) {
+      const groupNames = normalizePublicSub2ApiGroupNames(state?.sub2apiGroupNames);
+      const currentGroupName = String(state?.sub2apiGroupName || '').trim();
+      const fallbackGroupNames = groupNames.length ? groupNames : ['codex', 'openai-plus'];
+      const sub2apiGroupName = currentGroupName && !isXiaohongshuSub2ApiGroupName(currentGroupName)
+        ? currentGroupName
+        : (fallbackGroupNames[0] || 'codex');
+      const shouldClearCredentialAliases = hasXiaohongshuRuntimeResidue(state);
+      return {
+        sub2apiGroupName,
+        sub2apiGroupNames: fallbackGroupNames,
+        xiaohongshuModeEnabled: false,
+        xiaohongshuAccessToken: '',
+        directCheckoutAccessToken: '',
+        manualCheckoutAccessToken: '',
+        ...(shouldClearCredentialAliases ? {
+          chatgptAccessToken: '',
+          accessToken: '',
+        } : {}),
+      };
+    }
+
+    function isAutoRunPausedSnapshot(state = {}) {
+      return Boolean(state?.autoRunning) && state?.autoRunPhase === 'waiting_email';
+    }
+
     function getAutoRunRetryLimitForManualResume() {
       return Math.max(1, Math.floor(Number(AUTO_RUN_MAX_RETRIES_PER_ROUND) || 3));
     }
@@ -1426,9 +1511,15 @@
         }
 
         case 'AUTO_RUN': {
-          clearStopRequest();
-          if (message.source === 'sidepanel') {
-            await lockAutomationWindowFromMessage(message, sender);
+          const preflightState = await getState();
+          if (typeof isAutoRunLockedState === 'function' && isAutoRunLockedState(preflightState)) {
+            throw new Error('自动流程正在运行中，请先停止当前流程。');
+          }
+          if (isAutoRunPausedSnapshot(preflightState)) {
+            throw new Error('自动流程当前已暂停。请点击“继续”，或先确认接管自动流程后再重新启动。');
+          }
+          if (getPendingAutoRunTimerPlan(preflightState)) {
+            throw new Error('已有自动运行倒计时计划，请先取消或立即开始。');
           }
           if (Boolean(message.payload?.contributionMode) && typeof setContributionMode === 'function') {
             await setContributionMode(true);
@@ -1446,23 +1537,156 @@
           if (autoRunStartValidation?.ok === false) {
             throw new Error(autoRunStartValidation.errors?.[0]?.message || '当前设置不支持启动自动流程。');
           }
+          if (typeof isAutoRunLockedState === 'function' && isAutoRunLockedState(state)) {
+            throw new Error('自动流程正在运行中，请先停止当前流程。');
+          }
+          if (isAutoRunPausedSnapshot(state)) {
+            throw new Error('自动流程当前已暂停。请点击“继续”，或先确认接管自动流程后再重新启动。');
+          }
           if (getPendingAutoRunTimerPlan(state)) {
             throw new Error('已有自动运行倒计时计划，请先取消或立即开始。');
           }
+          if (message.source === 'sidepanel') {
+            await lockAutomationWindowFromMessage(message, sender);
+          }
+          clearStopRequest();
           const totalRuns = normalizeRunCount(message.payload?.totalRuns || 1);
           const autoRunSkipFailures = Boolean(message.payload?.autoRunSkipFailures);
           const autoRunRetryNonFreeTrial = Boolean(message.payload?.autoRunRetryNonFreeTrial);
           const autoRunRetryPaypalCallback = Boolean(message.payload?.autoRunRetryPaypalCallback);
           const mode = message.payload?.mode === 'continue' ? 'continue' : 'restart';
-          await setState({ autoRunSkipFailures, autoRunRetryNonFreeTrial, autoRunRetryPaypalCallback });
+          await setState({
+            ...buildXiaohongshuRuntimeReset(state),
+            autoRunSkipFailures,
+            autoRunRetryNonFreeTrial,
+            autoRunRetryPaypalCallback,
+          });
           startAutoRunLoop(totalRuns, { autoRunSkipFailures, autoRunRetryNonFreeTrial, autoRunRetryPaypalCallback, mode });
           return { ok: true };
         }
 
-        case 'SCHEDULE_AUTO_RUN': {
-          clearStopRequest();
+        case 'AUTO_RUN_XIAOHONGSHU': {
+          const accessToken = resolveXiaohongshuAccessToken(message.payload || {});
+          if (!accessToken) {
+            throw new Error('小红书模式缺少 accessToken，请先粘贴 /api/auth/session 返回中的 accessToken。');
+          }
+
+          let currentState = await getState();
+          if (getPendingAutoRunTimerPlan(currentState)) {
+            throw new Error('已有自动运行倒计时计划，请先取消或立即开始。');
+          }
+          if (typeof isAutoRunLockedState === 'function' && isAutoRunLockedState(currentState)) {
+            throw new Error('自动流程正在运行中，请先停止当前流程。');
+          }
+          if (isAutoRunPausedSnapshot(currentState)) {
+            throw new Error('自动流程当前已暂停。请点击“继续”，或先确认接管自动流程后再启动小红书模式。');
+          }
+          if (Boolean(message.payload?.contributionMode) && typeof setContributionMode === 'function') {
+            await setContributionMode(true);
+            if (typeof setState === 'function') {
+              const contributionNickname = String(message.payload?.contributionNickname || '').trim();
+              const contributionQq = String(message.payload?.contributionQq || '').trim();
+              await setState({
+                contributionNickname,
+                contributionQq,
+              });
+            }
+          }
+
+          currentState = await getState();
+          if (getPendingAutoRunTimerPlan(currentState)) {
+            throw new Error('已有自动运行倒计时计划，请先取消或立即开始。');
+          }
+          if (typeof isAutoRunLockedState === 'function' && isAutoRunLockedState(currentState)) {
+            throw new Error('自动流程正在运行中，请先停止当前流程。');
+          }
+          if (isAutoRunPausedSnapshot(currentState)) {
+            throw new Error('自动流程当前已暂停。请点击“继续”，或先确认接管自动流程后再启动小红书模式。');
+          }
+
+          const startNodeId = 'plus-checkout-create';
+          const xiaohongshuState = {
+            ...currentState,
+            plusModeEnabled: true,
+            plusPaymentMethod: 'paypal',
+            plusCheckoutCloudConversionEnabled: true,
+            signupMethod: 'email',
+            resolvedSignupMethod: 'email',
+          };
+          const autoRunStartValidation = validateAutoRunStart(xiaohongshuState, { state: xiaohongshuState });
+          if (autoRunStartValidation?.ok === false) {
+            throw new Error(autoRunStartValidation.errors?.[0]?.message || '当前设置不支持启动小红书模式。');
+          }
+          const nodeStatuses = buildXiaohongshuNodeStatuses(xiaohongshuState, startNodeId);
+          const autoRunSkipFailures = Boolean(message.payload?.autoRunSkipFailures);
+          const autoRunRetryNonFreeTrial = Boolean(message.payload?.autoRunRetryNonFreeTrial);
+          const autoRunRetryPaypalCallback = Boolean(message.payload?.autoRunRetryPaypalCallback);
+
           if (message.source === 'sidepanel') {
             await lockAutomationWindowFromMessage(message, sender);
+          }
+          clearStopRequest();
+          await setState({
+            plusModeEnabled: true,
+            plusPaymentMethod: 'paypal',
+            plusCheckoutCloudConversionEnabled: true,
+            signupMethod: 'email',
+            resolvedSignupMethod: 'email',
+            sub2apiGroupName: 'xiaohongshu',
+            sub2apiGroupNames: ['xiaohongshu'],
+            sub2apiSessionId: null,
+            sub2apiOAuthState: null,
+            sub2apiGroupId: null,
+            sub2apiGroupIds: [],
+            sub2apiDraftName: null,
+            sub2apiProxyId: null,
+            xiaohongshuModeEnabled: true,
+            xiaohongshuAccessToken: accessToken,
+            directCheckoutAccessToken: accessToken,
+            manualCheckoutAccessToken: accessToken,
+            accessToken,
+            chatgptAccessToken: accessToken,
+            nodeStatuses,
+            currentNodeId: startNodeId,
+            plusCheckoutTabId: null,
+            plusCheckoutUrl: '',
+            plusReturnUrl: '',
+            plusCheckoutSource: 'xiaohongshu',
+            plusManualConfirmationPending: false,
+            plusManualConfirmationRequestId: '',
+            plusManualConfirmationMessage: '',
+            plusManualConfirmationAutoRunContext: false,
+            plusManualConfirmationResolved: false,
+            plusManualConfirmationResolvedAutoSelected: false,
+            autoRunSkipFailures,
+            autoRunRetryNonFreeTrial,
+            autoRunRetryPaypalCallback,
+          });
+          await addLog(
+            '小红书模式：已跳过注册/登录前置步骤，将从创建 Plus Checkout 开始，并在成功后继续执行后续导入 SESSION 节点。',
+            'info',
+            { nodeId: startNodeId }
+          );
+          startAutoRunLoop(1, {
+            autoRunSkipFailures,
+            autoRunRetryNonFreeTrial,
+            autoRunRetryPaypalCallback,
+            xiaohongshuModeEnabled: true,
+            mode: 'continue',
+          });
+          return { ok: true };
+        }
+
+        case 'SCHEDULE_AUTO_RUN': {
+          const preflightState = await getState();
+          if (typeof isAutoRunLockedState === 'function' && isAutoRunLockedState(preflightState)) {
+            throw new Error('自动流程正在运行中，请先停止当前流程。');
+          }
+          if (isAutoRunPausedSnapshot(preflightState)) {
+            throw new Error('自动流程当前已暂停。请点击“继续”，或先确认接管自动流程后再重新计划。');
+          }
+          if (getPendingAutoRunTimerPlan(preflightState)) {
+            throw new Error('已有自动运行倒计时计划，请先取消或立即开始。');
           }
           if (Boolean(message.payload?.contributionMode) && typeof setContributionMode === 'function') {
             await setContributionMode(true);
@@ -1480,14 +1704,34 @@
           if (autoRunStartValidation?.ok === false) {
             throw new Error(autoRunStartValidation.errors?.[0]?.message || '当前设置不支持启动自动流程。');
           }
+          if (typeof isAutoRunLockedState === 'function' && isAutoRunLockedState(state)) {
+            throw new Error('自动流程正在运行中，请先停止当前流程。');
+          }
+          if (isAutoRunPausedSnapshot(state)) {
+            throw new Error('自动流程当前已暂停。请点击“继续”，或先确认接管自动流程后再重新计划。');
+          }
           const totalRuns = normalizeRunCount(message.payload?.totalRuns || 1);
-          return await scheduleAutoRun(totalRuns, {
+          const autoRunSkipFailures = Boolean(message.payload?.autoRunSkipFailures);
+          const autoRunRetryNonFreeTrial = Boolean(message.payload?.autoRunRetryNonFreeTrial);
+          const autoRunRetryPaypalCallback = Boolean(message.payload?.autoRunRetryPaypalCallback);
+          const result = await scheduleAutoRun(totalRuns, {
             delayMinutes: message.payload?.delayMinutes,
-            autoRunSkipFailures: Boolean(message.payload?.autoRunSkipFailures),
-            autoRunRetryNonFreeTrial: Boolean(message.payload?.autoRunRetryNonFreeTrial),
-            autoRunRetryPaypalCallback: Boolean(message.payload?.autoRunRetryPaypalCallback),
+            autoRunSkipFailures,
+            autoRunRetryNonFreeTrial,
+            autoRunRetryPaypalCallback,
             mode: message.payload?.mode,
           });
+          if (message.source === 'sidepanel') {
+            await lockAutomationWindowFromMessage(message, sender);
+          }
+          clearStopRequest();
+          await setState({
+            ...buildXiaohongshuRuntimeReset(state),
+            autoRunSkipFailures,
+            autoRunRetryNonFreeTrial,
+            autoRunRetryPaypalCallback,
+          });
+          return result;
         }
 
         case 'START_SCHEDULED_AUTO_RUN_NOW': {

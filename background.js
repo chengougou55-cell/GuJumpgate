@@ -557,6 +557,7 @@ const DEFAULT_GPC_HELPER_API_URL = 'https://your-gpc-helper-domain.example';
 const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL = 'https://gujumpgate.zg.fyi/api/checkout';
 const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY = '2KwVxE6f0ABH002JLkoQJ9ReRf4_d01y';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
+const XIAOHONGSHU_SUB2API_GROUP_NAME = 'xiaohongshu';
 const DEFAULT_SUB2API_PROXY_NAME = '';
 const DEFAULT_SUB2API_ACCOUNT_PRIORITY = 1;
 const DEFAULT_PANEL_MODE = 'sub2api';
@@ -3035,6 +3036,15 @@ function normalizeSub2ApiGroupNames(value = '') {
   return names;
 }
 
+function isXiaohongshuSub2ApiGroupName(value = '') {
+  return String(value || '').trim().toLowerCase() === XIAOHONGSHU_SUB2API_GROUP_NAME;
+}
+
+function normalizePublicSub2ApiGroupNames(value = '') {
+  return normalizeSub2ApiGroupNames(value)
+    .filter((name) => !isXiaohongshuSub2ApiGroupName(name));
+}
+
 function normalizeSub2ApiAccountPriority(value, fallback = DEFAULT_SUB2API_ACCOUNT_PRIORITY) {
   const rawValue = String(value ?? '').trim();
   const numeric = Number(rawValue);
@@ -3064,9 +3074,9 @@ function normalizePersistentSettingValue(key, value) {
     case 'sub2apiPassword':
       return String(value || '');
     case 'sub2apiGroupName':
-      return String(value || '').trim();
+      return isXiaohongshuSub2ApiGroupName(value) ? DEFAULT_SUB2API_GROUP_NAME : String(value || '').trim();
     case 'sub2apiGroupNames':
-      return normalizeSub2ApiGroupNames(value);
+      return normalizePublicSub2ApiGroupNames(value);
     case 'sub2apiAccountPriority':
       return normalizeSub2ApiAccountPriority(value);
     case 'sub2apiDefaultProxyName':
@@ -3676,13 +3686,16 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
     Object.prototype.hasOwnProperty.call(payload, 'sub2apiGroupName')
     || Object.prototype.hasOwnProperty.call(payload, 'sub2apiGroupNames')
   ) {
-    const groupNames = normalizeSub2ApiGroupNames([
+    const groupNames = normalizePublicSub2ApiGroupNames([
       ...(Array.isArray(payload.sub2apiGroupNames) ? payload.sub2apiGroupNames : []),
       payload.sub2apiGroupName,
     ]);
     payload.sub2apiGroupNames = groupNames.length
       ? groupNames
       : [...DEFAULT_SUB2API_GROUP_NAMES];
+    if (!payload.sub2apiGroupName || isXiaohongshuSub2ApiGroupName(payload.sub2apiGroupName)) {
+      payload.sub2apiGroupName = payload.sub2apiGroupNames[0] || DEFAULT_SUB2API_GROUP_NAME;
+    }
   }
   const nextSignupConstraintState = {
     ...PERSISTED_SETTING_DEFAULTS,
@@ -3793,8 +3806,23 @@ async function initializeSessionStorageAccess() {
   }
 }
 
+function redactSensitiveStateForLog(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactSensitiveStateForLog(entry));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
+    if (/token|password|secret|api[_-]?key/i.test(String(key || ''))) {
+      return [key, '<redacted>'];
+    }
+    return [key, redactSensitiveStateForLog(entry)];
+  }));
+}
+
 async function setState(updates) {
-  console.log(LOG_PREFIX, 'storage.set:', JSON.stringify(updates).slice(0, 200));
+  console.log(LOG_PREFIX, 'storage.set:', JSON.stringify(redactSensitiveStateForLog(updates)).slice(0, 200));
   if (Object.keys(updates || {}).length > 0) {
     const currentSessionState = await chrome.storage.session.get(null);
     const sessionUpdates = buildStatePatchWithRuntimeState({
@@ -14097,6 +14125,7 @@ const sub2ApiSessionImportExecutor = self.MultiPageBackgroundSub2ApiSessionImpor
   throwIfStopped,
   waitForTabCompleteUntilStopped,
   DEFAULT_SUB2API_GROUP_NAME,
+  XIAOHONGSHU_SUB2API_GROUP_NAME,
 });
 const cpaSessionImportExecutor = self.MultiPageBackgroundCpaSessionImport?.createCpaSessionImportExecutor({
   addLog,

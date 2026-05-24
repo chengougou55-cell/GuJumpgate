@@ -395,7 +395,11 @@
         autoRunRetryNonFreeTrial = false,
         autoRunRetryPaypalCallback = false,
         roundSummaries = [],
+        xiaohongshuModeEnabled = false,
       } = options;
+      if (xiaohongshuModeEnabled) {
+        return false;
+      }
       const fallbackThreadIntervalMinutes = normalizeAutoRunFallbackThreadIntervalMinutes(
         (await getState()).autoRunFallbackThreadIntervalMinutes
       );
@@ -430,8 +434,15 @@
       return true;
     }
 
-    async function handleAutoRunLoopUnhandledError(error) {
+    async function handleAutoRunLoopUnhandledError(error, options = {}) {
       const currentRuntime = runtime.get();
+      let latestState = null;
+      try {
+        latestState = await getState();
+      } catch {
+        latestState = null;
+      }
+      const shouldResetXiaohongshuRuntime = Boolean(options?.xiaohongshuModeEnabled || latestState?.xiaohongshuModeEnabled);
       console.error('Auto run loop crashed:', error);
       if (!isStopError(error)) {
         await addLog(`自动运行异常终止：${getErrorMessage(error) || '未知错误'}`, 'error');
@@ -447,14 +458,77 @@
         autoRunSessionId: 0,
         autoRunTimerPlan: null,
         scheduledAutoRunPlan: null,
+        ...(shouldResetXiaohongshuRuntime ? buildXiaohongshuRuntimeReset(latestState || {}) : {}),
       });
       clearStopRequest();
     }
 
     function startAutoRunLoop(totalRuns, options = {}) {
       autoRunLoop(totalRuns, options).catch((error) => {
-        handleAutoRunLoopUnhandledError(error).catch(() => {});
+        handleAutoRunLoopUnhandledError(error, {
+          xiaohongshuModeEnabled: Boolean(options?.xiaohongshuModeEnabled),
+        }).catch(() => {});
       });
+    }
+
+    function isXiaohongshuSub2ApiGroupName(value = '') {
+      return String(value || '').trim().toLowerCase() === 'xiaohongshu';
+    }
+
+    function normalizePublicSub2ApiGroupNames(value = '') {
+      const source = Array.isArray(value)
+        ? value
+        : String(value || '').split(/[\r\n,，、;；]+/);
+      const names = [];
+      const seen = new Set();
+      for (const item of source) {
+        const name = String(item || '').trim();
+        const key = name.toLowerCase();
+        if (!key || key === 'xiaohongshu' || seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        names.push(name);
+      }
+      return names;
+    }
+
+    function hasXiaohongshuRuntimeResidue(state = {}) {
+      const rawGroupNames = Array.isArray(state?.sub2apiGroupNames)
+        ? state.sub2apiGroupNames
+        : String(state?.sub2apiGroupNames || '').split(/[\r\n,，、;；]+/);
+      const hasXiaohongshuGroup = isXiaohongshuSub2ApiGroupName(state?.sub2apiGroupName)
+        || rawGroupNames.some((item) => isXiaohongshuSub2ApiGroupName(item));
+      return Boolean(
+        state?.xiaohongshuModeEnabled
+        || hasXiaohongshuGroup
+        || String(state?.xiaohongshuAccessToken || '').trim()
+        || String(state?.directCheckoutAccessToken || '').trim()
+        || String(state?.manualCheckoutAccessToken || '').trim()
+        || String(state?.plusCheckoutSource || '').trim().toLowerCase() === 'xiaohongshu'
+      );
+    }
+
+    function buildXiaohongshuRuntimeReset(state = {}) {
+      const groupNames = normalizePublicSub2ApiGroupNames(state?.sub2apiGroupNames);
+      const currentGroupName = String(state?.sub2apiGroupName || '').trim();
+      const fallbackGroupNames = groupNames.length ? groupNames : ['codex', 'openai-plus'];
+      const sub2apiGroupName = currentGroupName && !isXiaohongshuSub2ApiGroupName(currentGroupName)
+        ? currentGroupName
+        : (fallbackGroupNames[0] || 'codex');
+      const shouldClearCredentialAliases = hasXiaohongshuRuntimeResidue(state);
+      return {
+        sub2apiGroupName,
+        sub2apiGroupNames: fallbackGroupNames,
+        xiaohongshuModeEnabled: false,
+        xiaohongshuAccessToken: '',
+        directCheckoutAccessToken: '',
+        manualCheckoutAccessToken: '',
+        ...(shouldClearCredentialAliases ? {
+          chatgptAccessToken: '',
+          accessToken: '',
+        } : {}),
+      };
     }
 
     async function autoRunLoop(totalRuns, options = {}) {
@@ -486,14 +560,21 @@
       const autoRunSkipFailures = Boolean(options.autoRunSkipFailures);
       const autoRunRetryNonFreeTrial = Boolean(options.autoRunRetryNonFreeTrial);
       const autoRunRetryPaypalCallback = Boolean(options.autoRunRetryPaypalCallback);
+      const preserveXiaohongshuRuntime = Boolean(options.xiaohongshuModeEnabled);
       const initialMode = options.mode === 'continue' ? 'continue' : 'restart';
+      const preflightState = await getState();
+      const resetStaleXiaohongshuRuntime = !preserveXiaohongshuRuntime && Boolean(preflightState?.xiaohongshuModeEnabled);
+      if (resetStaleXiaohongshuRuntime) {
+        await setState(buildXiaohongshuRuntimeReset(preflightState));
+      }
+      const effectiveInitialMode = resetStaleXiaohongshuRuntime ? 'restart' : initialMode;
       const resumeCurrentRun = Number.isInteger(options.resumeCurrentRun) && options.resumeCurrentRun > 0
         ? Math.min(totalRuns, options.resumeCurrentRun)
         : 1;
       const resumeAttemptRun = Number.isInteger(options.resumeAttemptRun) && options.resumeAttemptRun > 0
         ? Math.min(AUTO_RUN_MAX_RETRIES_PER_ROUND + 1, options.resumeAttemptRun)
         : 1;
-      let continueCurrentOnFirstAttempt = initialMode === 'continue';
+      let continueCurrentOnFirstAttempt = effectiveInitialMode === 'continue';
       let forceFreshTabsNextRun = false;
       let stoppedEarly = false;
       let parkedByTimer = false;
@@ -612,6 +693,14 @@
               cloudflareDomain: prevState.cloudflareDomain,
               cloudflareDomains: prevState.cloudflareDomains,
               reusablePhoneActivation: prevState.reusablePhoneActivation,
+              ...(preserveXiaohongshuRuntime ? {
+                xiaohongshuModeEnabled: true,
+                xiaohongshuAccessToken: prevState.xiaohongshuAccessToken,
+                directCheckoutAccessToken: prevState.directCheckoutAccessToken,
+                manualCheckoutAccessToken: prevState.manualCheckoutAccessToken,
+                chatgptAccessToken: prevState.chatgptAccessToken,
+                accessToken: prevState.accessToken,
+              } : {}),
               autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
               autoRunSessionId: sessionId,
               tabRegistry: {},
@@ -799,6 +888,7 @@
                   autoRunRetryNonFreeTrial,
                   autoRunRetryPaypalCallback,
                   roundSummaries,
+                  xiaohongshuModeEnabled: preserveXiaohongshuRuntime,
                 });
                 if (parkedForRetry) {
                   parkedByTimer = true;
@@ -863,6 +953,7 @@
                   autoRunRetryNonFreeTrial,
                   autoRunRetryPaypalCallback,
                   roundSummaries,
+                  xiaohongshuModeEnabled: preserveXiaohongshuRuntime,
                 });
                 if (parkedForRetry) {
                   parkedByTimer = true;
@@ -1221,6 +1312,7 @@
                   autoRunRetryNonFreeTrial,
                   autoRunRetryPaypalCallback,
                   roundSummaries,
+                  xiaohongshuModeEnabled: preserveXiaohongshuRuntime,
                 });
                 if (parkedForRetry) {
                   parkedByTimer = true;
@@ -1349,6 +1441,7 @@
         autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
         autoRunTimerPlan: null,
         scheduledAutoRunPlan: null,
+        ...(preserveXiaohongshuRuntime ? buildXiaohongshuRuntimeReset(await getState()) : {}),
         ...getAutoRunStatusPayload(deps.getStopRequested() || stoppedEarly ? 'stopped' : 'complete', {
           currentRun: deps.getStopRequested() || stoppedEarly ? afterRuntime.autoRunCurrentRun : afterRuntime.autoRunTotalRuns,
           totalRuns: afterRuntime.autoRunTotalRuns,

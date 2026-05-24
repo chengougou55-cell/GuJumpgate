@@ -6,6 +6,7 @@
       addLog = async () => {},
       normalizeSub2ApiUrl = (value) => value,
       DEFAULT_SUB2API_GROUP_NAME = 'codex',
+      XIAOHONGSHU_SUB2API_GROUP_NAME = 'xiaohongshu',
       fetchImpl = (...args) => fetch(...args),
     } = deps;
 
@@ -156,6 +157,23 @@
         seen.add(key);
         names.push(name);
       }
+      return names.length ? names : [DEFAULT_SUB2API_GROUP_NAME];
+    }
+
+    function isXiaohongshuSub2ApiGroupName(value = '') {
+      return normalizeString(value).toLowerCase() === normalizeString(XIAOHONGSHU_SUB2API_GROUP_NAME).toLowerCase();
+    }
+
+    function isXiaohongshuModeState(state = {}) {
+      return Boolean(state?.xiaohongshuModeEnabled);
+    }
+
+    function resolveSub2ApiGroupNamesForState(state = {}) {
+      if (isXiaohongshuModeState(state)) {
+        return XIAOHONGSHU_SUB2API_GROUP_NAME;
+      }
+      const names = normalizeSub2ApiGroupNames(state.sub2apiGroupName || DEFAULT_SUB2API_GROUP_NAME)
+        .filter((name) => !isXiaohongshuSub2ApiGroupName(name));
       return names.length ? names : [DEFAULT_SUB2API_GROUP_NAME];
     }
 
@@ -613,7 +631,7 @@
         accounts: [account],
       };
       const warnings = [];
-      const groupNames = state.sub2apiGroupName || DEFAULT_SUB2API_GROUP_NAME;
+      const groupNames = resolveSub2ApiGroupNamesForState(state);
       const proxyPreference = resolveSub2ApiProxyPreference(state);
       const shouldResolveRemote = options.resolveRemote !== false && hasSub2ApiLoginConfig(state);
 
@@ -778,7 +796,7 @@
     async function generateOpenAiAuthUrl(state = {}, options = {}) {
       const logLabel = normalizeString(options.logLabel) || 'OAuth 刷新';
       const redirectUri = normalizeRedirectUri(options.redirectUri || DEFAULT_REDIRECT_URI);
-      const groupNames = normalizeSub2ApiGroupNames(state.sub2apiGroupName || DEFAULT_SUB2API_GROUP_NAME);
+      const groupNames = normalizeSub2ApiGroupNames(resolveSub2ApiGroupNamesForState(state));
       const groupName = groupNames[0] || DEFAULT_SUB2API_GROUP_NAME;
 
       await logWithOptions(`${logLabel}：正在通过 SUB2API 管理接口登录并生成 OpenAI Auth 链接...`, 'info', options);
@@ -852,15 +870,18 @@
       const proxy = proxySelector ? await resolveSub2ApiProxy(origin, token, proxySelector, options) : null;
       const proxyId = normalizeProxyId(proxy?.id);
       const accountPriority = resolveSub2ApiAccountPriority(state);
-      const storedGroupIds = Array.isArray(state.sub2apiGroupIds) ? state.sub2apiGroupIds : [];
+      const groupNamesForState = resolveSub2ApiGroupNamesForState(state);
+      const storedGroupIds = isXiaohongshuModeState(state)
+        ? []
+        : (Array.isArray(state.sub2apiGroupIds) ? state.sub2apiGroupIds : []);
       const groupIdsFromState = storedGroupIds
         .map((id) => Number(id))
         .filter((id) => Number.isFinite(id) && id > 0);
       const groups = groupIdsFromState.length
         ? groupIdsFromState.map((id) => ({ id }))
-        : (state.sub2apiGroupId
-          ? [{ id: state.sub2apiGroupId, name: state.sub2apiGroupName || DEFAULT_SUB2API_GROUP_NAME }]
-          : await getGroupsByNames(origin, token, state.sub2apiGroupName || DEFAULT_SUB2API_GROUP_NAME, options));
+        : (!isXiaohongshuModeState(state) && state.sub2apiGroupId
+          ? [{ id: state.sub2apiGroupId, name: groupNamesForState }]
+          : await getGroupsByNames(origin, token, groupNamesForState, options));
 
       await logWithOptions(`${logLabel}：正在通过 SUB2API 管理接口交换 OpenAI 授权码...`, 'info', options);
       if (proxy) {
@@ -898,7 +919,7 @@
       const accountName = resolvedEmail
         || flowEmail
         || normalizeString(state.sub2apiDraftName)
-        || buildDraftAccountName(state.sub2apiGroupName || DEFAULT_SUB2API_GROUP_NAME);
+        || buildDraftAccountName(resolveSub2ApiGroupNamesForState(state));
       const createPayload = {
         name: accountName,
         notes: '',
@@ -945,7 +966,7 @@
 
       await logWithOptions(`${logLabel}：正在通过 SUB2API 管理接口登录并准备导入当前 ChatGPT 会话...`, 'info', options);
       const { origin, token } = await loginSub2Api(state, options);
-      const groupNames = state.sub2apiGroupName || DEFAULT_SUB2API_GROUP_NAME;
+      const groupNames = resolveSub2ApiGroupNamesForState(state);
       const groups = await getGroupsByNames(origin, token, groupNames, options);
       const groupLabel = groups.map((item) => `${item.name}（${item.id}）`).join('、');
       const proxyPreference = resolveSub2ApiProxyPreference(state);

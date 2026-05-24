@@ -26,6 +26,7 @@
       throwIfStopped = () => {},
       waitForTabCompleteUntilStopped = async () => {},
       DEFAULT_SUB2API_GROUP_NAME = 'codex',
+      XIAOHONGSHU_SUB2API_GROUP_NAME = 'xiaohongshu',
     } = deps;
 
     let sub2ApiApi = null;
@@ -50,12 +51,27 @@
         addLog: rawAddLog,
         normalizeSub2ApiUrl,
         DEFAULT_SUB2API_GROUP_NAME,
+        XIAOHONGSHU_SUB2API_GROUP_NAME,
       });
       return sub2ApiApi;
     }
 
     function normalizeString(value = '') {
       return String(value || '').trim();
+    }
+
+    function resolveDirectSessionAccessToken(state = {}) {
+      if (!state?.xiaohongshuModeEnabled) {
+        return '';
+      }
+      return normalizeString(
+        state?.xiaohongshuAccessToken
+        || state?.directCheckoutAccessToken
+        || state?.manualCheckoutAccessToken
+        || state?.chatgptAccessToken
+        || state?.accessToken
+        || ''
+      );
     }
 
     function resolveVisibleStep(state = {}) {
@@ -295,9 +311,25 @@
       throwIfStopped();
       const visibleStep = resolveVisibleStep(state);
       const api = getSub2ApiApi();
+      const directAccessToken = resolveDirectSessionAccessToken(state);
 
       const result = await runSessionImportWithRetries(async (attempt) => {
         const attemptSuffix = attempt > 1 ? `（第 ${attempt}/${SESSION_IMPORT_MAX_ATTEMPTS} 次尝试）` : '';
+        if (directAccessToken) {
+          await addStepLog(visibleStep, `小红书模式已接收 accessToken，正在直接导入 SUB2API${attemptSuffix}...`, 'info');
+          throwIfStopped();
+          return api.importCurrentChatGptSession({
+            ...state,
+            accessToken: directAccessToken,
+          }, {
+            visibleStep,
+            logLabel: `步骤 ${visibleStep}`,
+            logOptions: { step: visibleStep, stepKey: 'sub2api-session-import' },
+            timeoutMs: SESSION_IMPORT_TIMEOUT_MS,
+            importTimeoutMs: SESSION_IMPORT_TIMEOUT_MS,
+          });
+        }
+
         await addStepLog(visibleStep, `正在定位当前 ChatGPT 会话页并准备导入 SUB2API${attemptSuffix}...`, 'info');
         const tabId = await resolveSessionTabId(state);
         const tab = await getResolvedSessionTab(tabId, visibleStep);

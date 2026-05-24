@@ -54,6 +54,20 @@
       return String(value || '').trim();
     }
 
+    function resolveDirectSessionAccessToken(state = {}) {
+      if (!state?.xiaohongshuModeEnabled) {
+        return '';
+      }
+      return normalizeString(
+        state?.xiaohongshuAccessToken
+        || state?.directCheckoutAccessToken
+        || state?.manualCheckoutAccessToken
+        || state?.chatgptAccessToken
+        || state?.accessToken
+        || ''
+      );
+    }
+
     function resolveVisibleStep(state = {}) {
       const visibleStep = Math.floor(Number(state?.visibleStep) || 0);
       return visibleStep > 0 ? visibleStep : 10;
@@ -291,9 +305,25 @@
       throwIfStopped();
       const visibleStep = resolveVisibleStep(state);
       const api = getCpaApi();
+      const directAccessToken = resolveDirectSessionAccessToken(state);
 
       const result = await runSessionImportWithRetries(async (attempt) => {
         const attemptSuffix = attempt > 1 ? `（第 ${attempt}/${SESSION_IMPORT_MAX_ATTEMPTS} 次尝试）` : '';
+        if (directAccessToken) {
+          await addStepLog(visibleStep, `小红书模式已接收 accessToken，正在直接导入 CPA${attemptSuffix}...`, 'info');
+          throwIfStopped();
+          return api.importCurrentChatGptSession({
+            ...state,
+            accessToken: directAccessToken,
+          }, {
+            visibleStep,
+            logLabel: `步骤 ${visibleStep}`,
+            logOptions: { step: visibleStep, stepKey: 'cpa-session-import' },
+            timeoutMs: SESSION_IMPORT_TIMEOUT_MS,
+            importTimeoutMs: SESSION_IMPORT_TIMEOUT_MS,
+          });
+        }
+
         await addStepLog(visibleStep, `正在定位当前 ChatGPT 会话页并准备导入 CPA${attemptSuffix}...`, 'info');
         const tabId = await resolveSessionTabId(state);
         const tab = await getResolvedSessionTab(tabId, visibleStep);
