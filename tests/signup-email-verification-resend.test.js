@@ -1,0 +1,41 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+
+const repoRoot = path.resolve(__dirname, '..');
+const signupPageSource = fs.readFileSync(path.join(repoRoot, 'content/signup-page.js'), 'utf8');
+const fetchSignupCodeSource = fs.readFileSync(path.join(repoRoot, 'background/steps/fetch-signup-code.js'), 'utf8');
+const signupFlowHelpersSource = fs.readFileSync(path.join(repoRoot, 'background/signup-flow-helpers.js'), 'utf8');
+
+test('signup email-verification page clicks resend email twice before polling', () => {
+  assert.match(signupPageSource, /SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT = 2/);
+  assert.match(signupPageSource, /SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_WAIT_MS = 45000/);
+  assert.match(signupPageSource, /重新发送\(\?:验证码\|电子邮件\|邮件\)\?/);
+  assert.match(signupPageSource, /async function clickEmailVerificationExtraResends/);
+  assert.match(signupPageSource, /getEmailVerificationExtraResendStorageKey\(identifier = ''\)/);
+  assert.match(signupPageSource, /getEmailVerificationExtraResendRequestedAtStorageKey\(identifier = ''\)/);
+  assert.match(signupPageSource, /getEmailVerificationExtraResendCount\(identifier\)/);
+  assert.match(signupPageSource, /getEmailVerificationExtraResendLastRequestedAt\(identifier\)/);
+  assert.match(signupPageSource, /setEmailVerificationExtraResendCount\(completedCount, identifier\)/);
+  assert.match(signupPageSource, /setEmailVerificationExtraResendLastRequestedAt\(lastRequestedAt, identifier\)/);
+  assert.match(signupPageSource, /action = findResendVerificationCodeTrigger\(\{ allowDisabled: true \}\);/);
+  assert.match(signupPageSource, /handle405ResendError\(step, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_WAIT_MS\)/);
+  assert.match(signupPageSource, /if \(is405MethodNotAllowedPage\(\)\) \{\n\s+log\(`步骤 \$\{step\}：额外点击“重新发送电子邮件”后出现 405 错误，正在恢复\.\.\.`, 'warn'\);\n\s+await handle405ResendError\(step, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_WAIT_MS\);\n\s+continue;\n\s+\}\n\s+throwIfContactVerificationServerError\(\);\n\s+lastRequestedAt = Date\.now\(\);\n\s+clicked \+= 1;/);
+  assert.match(signupPageSource, /if \(!isEmailVerificationPage\(\)\) \{\n\s+break;\n\s+\}/);
+  assert.match(signupPageSource, /function isSignupEmailVerificationPageReady/);
+  assert.match(signupPageSource, /function shouldWaitForSignupVerificationCodeTarget/);
+  assert.match(signupPageSource, /accountIdentifier = String\(/);
+  assert.match(signupPageSource, /clickEmailVerificationExtraResends\(4, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT, \{\n\s+identifier: accountIdentifier,/);
+  assert.match(signupPageSource, /const extraResendResult = await clickEmailVerificationExtraResends\(4, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT, \{\n\s+identifier: accountIdentifier,\n\s+\}\);\n\s+if \(shouldWaitForSignupVerificationCodeTarget\(\)\) \{\n\s+await waitForVerificationCodeTarget\(15000\);/);
+  assert.match(signupPageSource, /extraEmailVerificationResendClicked/);
+  assert.match(signupPageSource, /extraEmailVerificationResendLastRequestedAt/);
+  assert.match(fetchSignupCodeSource, /accountIdentifier: state\.accountIdentifier \|\| state\.email \|\| state\.phoneNumber \|\| ''/);
+  assert.match(fetchSignupCodeSource, /const hasExtraEmailVerificationResend = extraEmailVerificationResendClicked > 0\n\s+\|\| extraEmailVerificationResendLastRequestedAt > 0;/);
+  assert.match(fetchSignupCodeSource, /baseFilterAfterTimestamp = extraEmailVerificationResendLastRequestedAt \|\| requestedAt \|\| stepStartedAt/);
+  assert.match(fetchSignupCodeSource, /\]\.includes\(mail\.provider\) && !hasExtraEmailVerificationResend/);
+  assert.match(fetchSignupCodeSource, /lastResendAt: extraEmailVerificationResendLastRequestedAt \|\| undefined/);
+  assert.match(fetchSignupCodeSource, /进入 email-verification 后已额外点击“重新发送电子邮件”/);
+  assert.match(signupFlowHelpersSource, /async function finalizeSignupPasswordSubmitInTab\(tabId, password = '', step = 3, options = \{\}\)/);
+  assert.match(signupFlowHelpersSource, /accountIdentifier: options\?\.accountIdentifier/);
+});

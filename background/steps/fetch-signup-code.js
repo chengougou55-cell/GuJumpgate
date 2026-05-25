@@ -94,7 +94,7 @@
       return result || {};
     }
 
-    async function executeSignupEmailVerificationStep(state, stepStartedAt, verificationSessionKey) {
+    async function executeSignupEmailVerificationStep(state, stepStartedAt, verificationSessionKey, options = {}) {
       if (shouldUseCustomRegistrationEmail(state)) {
         await confirmCustomVerificationStepBypass(4);
         return;
@@ -104,7 +104,11 @@
       if (mail.error) throw new Error(mail.error);
 
       const requestedAt = Number(state?.signupVerificationRequestedAt) || 0;
-      const baseFilterAfterTimestamp = requestedAt || stepStartedAt;
+      const extraEmailVerificationResendLastRequestedAt = Number(options?.extraEmailVerificationResendLastRequestedAt) || 0;
+      const extraEmailVerificationResendClicked = Number(options?.extraEmailVerificationResendClicked) || 0;
+      const hasExtraEmailVerificationResend = extraEmailVerificationResendClicked > 0
+        || extraEmailVerificationResendLastRequestedAt > 0;
+      const baseFilterAfterTimestamp = extraEmailVerificationResendLastRequestedAt || requestedAt || stepStartedAt;
       const verificationFilterAfterTimestamp = mail.provider === '2925'
         ? Math.max(0, baseFilterAfterTimestamp - MAIL_2925_FILTER_LOOKBACK_MS)
         : Math.max(0, baseFilterAfterTimestamp - MAIL_VERIFICATION_FILTER_LOOKBACK_MS);
@@ -152,7 +156,7 @@
         CLOUDFLARE_TEMP_EMAIL_PROVIDER,
         CLOUD_MAIL_PROVIDER,
         OUTLOOK_EMAIL_PROVIDER,
-      ].includes(mail.provider);
+      ].includes(mail.provider) && !hasExtraEmailVerificationResend;
       const signupProfile = buildSignupProfileForVerificationStep();
 
       await resolveVerificationStep(4, state, mail, {
@@ -160,6 +164,7 @@
         sessionKey: verificationSessionKey,
         disableTimeBudgetCap: mail.provider === '2925',
         requestFreshCodeFirst: shouldRequestFreshCodeFirst,
+        lastResendAt: extraEmailVerificationResendLastRequestedAt || undefined,
         signupProfile,
         resendIntervalMs: mail.provider === LUCKMAIL_PROVIDER
           ? 15000
@@ -220,6 +225,9 @@
         source: 'background',
         payload: {
           password: state.password || state.customPassword || '',
+          email: state.email || '',
+          accountIdentifier: state.accountIdentifier || state.email || state.phoneNumber || '',
+          phoneNumber: state.phoneNumber || '',
           prepareSource: 'step4_execute',
           prepareLogLabel: '步骤 4 执行',
         },
@@ -285,6 +293,12 @@
       if (prepareResult && prepareResult.error) {
         throw new Error(prepareResult.error);
       }
+      if (Number(prepareResult?.extraEmailVerificationResendClicked) > 0) {
+        await addLog(
+          `步骤 4：进入 email-verification 后已额外点击“重新发送电子邮件” ${Number(prepareResult.extraEmailVerificationResendClicked)} 次。`,
+          'warn'
+        );
+      }
       if (prepareResult?.alreadyVerified) {
         await completeNodeFromBackground('fetch-signup-code', prepareResult?.skipProfileStep ? { skipProfileStep: true } : {});
         return;
@@ -294,12 +308,12 @@
         const phoneResult = await executeSignupPhoneCodeStep(state, signupTabId);
         if (phoneResult?.emailVerificationRequired || phoneResult?.emailVerificationPage) {
           await addLog('步骤 4：手机验证码已通过，OpenAI 要求继续邮箱验证，切换到邮箱验证码轮询。', 'info');
-          return executeSignupEmailVerificationStep(state, stepStartedAt, verificationSessionKey);
+          return executeSignupEmailVerificationStep(state, stepStartedAt, verificationSessionKey, prepareResult);
         }
         return phoneResult;
       }
 
-      return executeSignupEmailVerificationStep(state, stepStartedAt, verificationSessionKey);
+      return executeSignupEmailVerificationStep(state, stepStartedAt, verificationSessionKey, prepareResult);
     }
 
     return { executeStep4 };

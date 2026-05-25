@@ -190,7 +190,10 @@ const LOGIN_MORE_OPTIONS_PATTERN = /更多(?:选项|登录方式|方式)|其他(
 const LOGIN_EXTERNAL_IDP_PATTERN = /google|microsoft|apple|sso|single\s+sign[-\s]*on|企业|工作区|workspace/i;
 const LOGIN_CODE_ONLY_ACTION_PATTERN = /one[-\s]*time|passcode|use\s+(?:a\s+)?code|验证码|一次性/i;
 
-const RESEND_VERIFICATION_CODE_PATTERN = /重新发送(?:验证码)?|再次发送(?:验证码)?|重发(?:验证码)?|未收到(?:验证码|邮件)|resend(?:\s+code)?|send\s+(?:a\s+)?new\s+code|send\s+(?:it\s+)?again|request\s+(?:a\s+)?new\s+code|didn'?t\s+receive/i;
+const RESEND_VERIFICATION_CODE_PATTERN = /重新发送(?:验证码|电子邮件|邮件)?|再次发送(?:验证码|电子邮件|邮件)?|重发(?:验证码|电子邮件|邮件)?|未收到(?:验证码|邮件|电子邮件)|resend(?:\s+(?:code|email))?|send\s+(?:a\s+)?new\s+(?:code|email)|send\s+(?:it\s+)?again|request\s+(?:a\s+)?new\s+(?:code|email)|didn'?t\s+receive/i;
+const SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT = 2;
+const SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_WAIT_MS = 45000;
+const SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_STATE_KEY = '__MULTIPAGE_SIGNUP_EMAIL_VERIFICATION_EXTRA_RESENDS__';
 const PHONE_RESEND_SERVER_ERROR_PREFIX = 'PHONE_RESEND_SERVER_ERROR::';
 const CONTACT_VERIFICATION_SERVER_ERROR_PATTERN = /this\s+page\s+isn['’]?t\s+working|currently\s+unable\s+to\s+handle\s+this\s+request|http\s+error\s+500|500\s+internal\s+server\s+error/i;
 
@@ -294,6 +297,145 @@ function findResendVerificationCodeTrigger({ allowDisabled = false } = {}) {
 
 function isEmailVerificationPage() {
   return /\/email-verification(?:[/?#]|$)/i.test(location.pathname || '');
+}
+
+function getEmailVerificationExtraResendStorageKey(identifier = '') {
+  const resolvedIdentifier = String(identifier || '').trim().toLowerCase();
+  return `${SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_STATE_KEY}:${location.pathname || ''}:${location.search || ''}:${resolvedIdentifier}`;
+}
+
+function getEmailVerificationExtraResendRequestedAtStorageKey(identifier = '') {
+  return `${getEmailVerificationExtraResendStorageKey(identifier)}:lastRequestedAt`;
+}
+
+function getEmailVerificationExtraResendCount(identifier = '') {
+  const key = getEmailVerificationExtraResendStorageKey(identifier);
+  let value = '';
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage?.getItem) {
+      value = sessionStorage.getItem(key) || '';
+    }
+  } catch {}
+  if (!value && typeof window !== 'undefined') {
+    value = window[key] || '';
+  }
+  return Math.max(0, Math.floor(Number(value) || 0));
+}
+
+function getEmailVerificationExtraResendLastRequestedAt(identifier = '') {
+  const key = getEmailVerificationExtraResendRequestedAtStorageKey(identifier);
+  let value = '';
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage?.getItem) {
+      value = sessionStorage.getItem(key) || '';
+    }
+  } catch {}
+  if (!value && typeof window !== 'undefined') {
+    value = window[key] || '';
+  }
+  return Math.max(0, Math.floor(Number(value) || 0));
+}
+
+function setEmailVerificationExtraResendCount(count, identifier = '') {
+  const key = getEmailVerificationExtraResendStorageKey(identifier);
+  const value = String(Math.max(0, Math.floor(Number(count) || 0)));
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage?.setItem) {
+      sessionStorage.setItem(key, value);
+    }
+  } catch {}
+  if (typeof window !== 'undefined') {
+    window[key] = value;
+  }
+}
+
+function setEmailVerificationExtraResendLastRequestedAt(requestedAt, identifier = '') {
+  const key = getEmailVerificationExtraResendRequestedAtStorageKey(identifier);
+  const value = String(Math.max(0, Math.floor(Number(requestedAt) || 0)));
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage?.setItem) {
+      sessionStorage.setItem(key, value);
+    }
+  } catch {}
+  if (typeof window !== 'undefined') {
+    window[key] = value;
+  }
+}
+
+async function clickEmailVerificationExtraResends(step = 4, targetCount = SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT, options = {}) {
+  if (!isEmailVerificationPage()) {
+    return { extraResendClicked: 0, skipped: true };
+  }
+  const performOperationWithDelay = typeof getOperationDelayRunner === 'function'
+    ? getOperationDelayRunner()
+    : async (metadata, operation) => {
+        const rootScope = typeof window !== 'undefined' ? window : globalThis;
+        const gate = rootScope?.CodexOperationDelay?.performOperationWithDelay;
+        return typeof gate === 'function' ? gate(metadata, operation) : operation();
+      };
+
+  const maxClicks = Math.max(0, Math.floor(Number(targetCount) || 0));
+  const identifier = String(options?.identifier || '').trim().toLowerCase();
+  let completedCount = getEmailVerificationExtraResendCount(identifier);
+  let clicked = 0;
+  let lastRequestedAt = getEmailVerificationExtraResendLastRequestedAt(identifier);
+  while (completedCount < maxClicks) {
+    throwIfStopped();
+    if (!isEmailVerificationPage()) {
+      break;
+    }
+    throwIfContactVerificationServerError();
+    if (is405MethodNotAllowedPage()) {
+      await handle405ResendError(step, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_WAIT_MS);
+      continue;
+    }
+
+    let action = findResendVerificationCodeTrigger({ allowDisabled: true });
+    if (!action) {
+      log(`步骤 ${step}：email-verification 页面未找到“重新发送电子邮件”按钮，跳过额外重发。`, 'warn');
+      break;
+    }
+    if (!isActionEnabled(action)) {
+      log(`步骤 ${step}：正在等待“重新发送电子邮件”按钮变为可点击...`, 'info');
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_WAIT_MS) {
+        throwIfStopped();
+        action = findResendVerificationCodeTrigger({ allowDisabled: true });
+        if (action && isActionEnabled(action)) {
+          break;
+        }
+        await sleep(250);
+      }
+      if (!action || !isActionEnabled(action)) {
+        log(`步骤 ${step}：“重新发送电子邮件”按钮长时间不可点击，已完成 ${completedCount}/${maxClicks} 次额外重发。`, 'warn');
+        break;
+      }
+    }
+
+    await humanPause(350, 900);
+    await performOperationWithDelay({ stepKey: 'fetch-signup-code', kind: 'click', label: 'email-verification-extra-resend' }, async () => {
+      simulateClick(action);
+    });
+    await sleep(1800);
+    if (is405MethodNotAllowedPage()) {
+      log(`步骤 ${step}：额外点击“重新发送电子邮件”后出现 405 错误，正在恢复...`, 'warn');
+      await handle405ResendError(step, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_WAIT_MS);
+      continue;
+    }
+    throwIfContactVerificationServerError();
+    lastRequestedAt = Date.now();
+    clicked += 1;
+    completedCount += 1;
+    setEmailVerificationExtraResendCount(completedCount, identifier);
+    setEmailVerificationExtraResendLastRequestedAt(lastRequestedAt, identifier);
+    log(`步骤 ${step}：已额外点击“重新发送电子邮件”（${completedCount}/${maxClicks}）。`, 'warn');
+  }
+
+  return {
+    extraResendClicked: clicked,
+    extraResendTotal: completedCount,
+    extraResendLastRequestedAt: lastRequestedAt,
+  };
 }
 
 function getContactVerificationServerErrorText() {
@@ -3227,6 +3369,30 @@ function isSignupVerificationPageInteractiveReady(snapshot = null) {
   return Boolean(getVerificationCodeTarget());
 }
 
+function isSignupEmailVerificationPageReady(snapshot = null) {
+  if (!isEmailVerificationPage()) {
+    return false;
+  }
+  if (!isDocumentLoadComplete()) {
+    return false;
+  }
+  const resolvedSnapshot = snapshot || inspectSignupVerificationState();
+  return resolvedSnapshot?.state === 'verification'
+    && Boolean(findResendVerificationCodeTrigger({ allowDisabled: true }) || getVerificationCodeTarget());
+}
+
+function shouldWaitForSignupVerificationCodeTarget() {
+  if (!isEmailVerificationPage()) {
+    return true;
+  }
+
+  if (getVerificationCodeTarget()) {
+    return true;
+  }
+
+  return !findResendVerificationCodeTrigger({ allowDisabled: true });
+}
+
 function isStep8Ready() {
   const continueBtn = getPrimaryContinueButton();
   if (!continueBtn) return false;
@@ -4791,7 +4957,11 @@ async function waitForSignupVerificationTransition(timeout = 5000) {
     throwIfStopped();
 
     const snapshot = inspectSignupVerificationState();
-    if (snapshot.state === 'verification' && !isSignupVerificationPageInteractiveReady(snapshot)) {
+    if (
+      snapshot.state === 'verification'
+      && !isSignupVerificationPageInteractiveReady(snapshot)
+      && !isSignupEmailVerificationPageReady(snapshot)
+    ) {
       await sleep(200);
       continue;
     }
@@ -4820,6 +4990,12 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
         return typeof gate === 'function' ? gate(metadata, operation) : operation();
       };
   const { password } = payload;
+  const accountIdentifier = String(
+    payload?.accountIdentifier
+    || payload?.email
+    || payload?.phoneNumber
+    || ''
+  ).trim().toLowerCase();
   const prepareSource = String(payload?.prepareSource || '').trim() || 'step4_execute';
   const prepareLogLabel = String(payload?.prepareLogLabel || '').trim()
     || (prepareSource === 'step3_finalize' ? '步骤 3 收尾' : '步骤 4 执行');
@@ -4896,9 +5072,21 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
 
     if (snapshot.state === 'verification') {
       await waitForDocumentLoadComplete(15000, `${prepareLogLabel}：注册验证码页面`);
-      await waitForVerificationCodeTarget(15000);
+      const extraResendResult = await clickEmailVerificationExtraResends(4, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT, {
+        identifier: accountIdentifier,
+      });
+      if (shouldWaitForSignupVerificationCodeTarget()) {
+        await waitForVerificationCodeTarget(15000);
+      }
       log(`${prepareLogLabel}：验证码页面已完成加载并就绪${recoveryRound ? `（期间自动恢复 ${recoveryRound} 次）` : ''}。`, 'ok');
-      return { ready: true, retried: recoveryRound, prepareSource };
+      return {
+        ready: true,
+        retried: recoveryRound,
+        prepareSource,
+        extraEmailVerificationResendClicked: Number(extraResendResult?.extraResendClicked) || 0,
+        extraEmailVerificationResendTotal: Number(extraResendResult?.extraResendTotal) || 0,
+        extraEmailVerificationResendLastRequestedAt: Number(extraResendResult?.extraResendLastRequestedAt) || 0,
+      };
     }
 
     if (snapshot.state === 'email_exists') {

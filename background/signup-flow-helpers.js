@@ -239,7 +239,7 @@
       return result;
     }
 
-    async function finalizeSignupPasswordSubmitInTab(tabId, password = '', step = 3) {
+    async function finalizeSignupPasswordSubmitInTab(tabId, password = '', step = 3, options = {}) {
       if (!Number.isInteger(tabId)) {
         throw new Error(`认证页面标签页已关闭，无法完成步骤 ${step} 的提交后确认。`);
       }
@@ -260,6 +260,14 @@
           source: 'background',
           payload: {
             password: password || '',
+            email: options?.email || options?.state?.email || '',
+            accountIdentifier: options?.accountIdentifier
+              || options?.state?.accountIdentifier
+              || options?.state?.email
+              || options?.state?.phoneNumber
+              || options?.email
+              || '',
+            phoneNumber: options?.phoneNumber || options?.state?.phoneNumber || '',
             prepareSource: 'step3_finalize',
             prepareLogLabel: '步骤 3 收尾',
           },
