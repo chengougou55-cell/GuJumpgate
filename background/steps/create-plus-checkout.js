@@ -88,6 +88,7 @@
       fetch: fetchImpl = null,
       getState = null,
       requestStop = null,
+      requestManualAddEmailInput = null,
       registerTab,
       restoreCheckoutScopedProxySnapshot = null,
       sendTabMessageUntilStopped,
@@ -133,6 +134,20 @@
         return 'GPC';
       }
       return paymentMethod === PLUS_PAYMENT_METHOD_GOPAY ? 'GoPay' : 'PayPal';
+    }
+
+    function normalizeCheckoutEmail(value = '') {
+      const normalized = String(value || '').trim().toLowerCase();
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
+    }
+
+    function getStateCheckoutEmail(state = {}) {
+      return normalizeCheckoutEmail(
+        state?.email
+        || state?.registrationEmailState?.current
+        || state?.registrationEmailState?.previous
+        || ''
+      );
     }
 
     function shouldWaitForHostedCheckoutSuccess(state = {}, paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
@@ -947,6 +962,59 @@ function FindProxyForURL(url, host) {
       };
     }
 
+    function buildRegistrationEmailPatch(state = {}, email = '', source = 'hosted_checkout') {
+      const normalizedEmail = normalizeCheckoutEmail(email);
+      if (!normalizedEmail) {
+        return {};
+      }
+      const previous = String(
+        state?.registrationEmailState?.previous
+        || state?.registrationEmailState?.current
+        || state?.email
+        || ''
+      ).trim();
+      return {
+        email: normalizedEmail,
+        registrationEmailState: {
+          current: normalizedEmail,
+          previous: previous || normalizedEmail,
+          source,
+          updatedAt: Date.now(),
+        },
+      };
+    }
+
+    async function ensureHostedCheckoutEmail(state = {}, options = {}) {
+      const existingEmail = getStateCheckoutEmail(state);
+      if (existingEmail) {
+        return existingEmail;
+      }
+      if (!state?.normalHeroModeEnabled && !state?.manualSignupPhoneSmsEnabled) {
+        return '';
+      }
+      if (typeof requestManualAddEmailInput !== 'function') {
+        throw new Error('步骤 6：普通Hero支付邮箱缺失，且邮箱输入弹窗不可用，请保持侧边栏打开后重试。');
+      }
+      const email = normalizeCheckoutEmail(await requestManualAddEmailInput({
+        phoneNumber: String(
+          state?.signupPhoneNumber
+          || (String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone' ? state?.accountIdentifier : '')
+          || ''
+        ).trim(),
+        title: '普通Hero支付邮箱',
+        message: '当前支付页需要邮箱，请输入本轮后续绑定和支付要使用的邮箱。',
+      }));
+      if (!email) {
+        throw new Error('步骤 6：普通Hero支付邮箱输入已取消或格式无效。');
+      }
+      const patch = buildRegistrationEmailPatch(state, email, options.source || 'normal_hero_checkout');
+      await applyHostedCheckoutRuntimePatch({
+        ...patch,
+        manualAddEmailInputRequired: true,
+      });
+      return email;
+    }
+
     async function applyHostedCheckoutRuntimePatch(patch = {}) {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).length === 0) {
         return;
@@ -999,8 +1067,12 @@ function FindProxyForURL(url, host) {
     async function getHostedCheckoutRuntimeConfig(options = {}) {
       const {
         ensureCurrentSmsEntry = false,
+        ensureEmail = false,
       } = options || {};
       const state = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
+      const email = ensureEmail
+        ? await ensureHostedCheckoutEmail(state, { source: 'normal_hero_checkout' })
+        : getStateCheckoutEmail(state);
       let stored = {};
       if (chrome?.storage?.local?.get) {
         stored = await chrome.storage.local.get([
@@ -1071,6 +1143,7 @@ function FindProxyForURL(url, host) {
         selectedSmsEntry,
       });
       return {
+        email,
         verificationUrl,
         verificationPopupDelaySeconds,
         phone,
@@ -1428,7 +1501,7 @@ function FindProxyForURL(url, host) {
     function buildHostedCheckoutGuestProfile(address = {}, config = {}) {
       const card = buildHostedCheckoutVisaCard();
       return {
-        email: buildHostedCheckoutRandomEmail(),
+        email: normalizeCheckoutEmail(config?.email) || buildHostedCheckoutRandomEmail(),
         password: buildHostedCheckoutRandomPassword(),
         phone: String(config?.phone || '').trim(),
         firstName: 'James',
@@ -1524,6 +1597,7 @@ function FindProxyForURL(url, host) {
     async function fetchHostedCheckoutVerificationCode() {
       const runtimeConfig = await getHostedCheckoutRuntimeConfig({
         ensureCurrentSmsEntry: true,
+        ensureEmail: true,
       });
       const verificationUrl = runtimeConfig.verificationUrl;
       await addLog(`步骤 6：当前 hosted checkout 验证码接口配置为 ${verificationUrl || '(空)'}。`, 'info');
@@ -2122,6 +2196,7 @@ function FindProxyForURL(url, host) {
     async function runHostedCheckoutAutomation(tabId, completionPayload = {}) {
       const runtimeConfig = await getHostedCheckoutRuntimeConfig({
         ensureCurrentSmsEntry: true,
+        ensureEmail: true,
       });
       const address = await fetchHostedCheckoutAddress();
       await addLog(`步骤 6：hosted checkout 配置快照：${JSON.stringify(runtimeConfig?.diagnostics || {})}`, 'info');
@@ -2881,8 +2956,12 @@ function FindProxyForURL(url, host) {
 
     return {
       ...(enableTestHooks ? { __test: {
+        buildHostedCheckoutGuestProfile,
         buildHostedCheckoutReplacementCard,
+        ensureHostedCheckoutEmail,
+        getHostedCheckoutRuntimeConfig,
         pollHostedCheckoutVerificationCodeWithResend,
+        runHostedCheckoutAutomation,
       } } : {}),
       executePlusCheckoutCreate,
       fetchHostedCheckoutVerificationCodeManually,

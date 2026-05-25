@@ -702,6 +702,16 @@
                 signupMethod: 'phone',
                 resolvedSignupMethod: 'phone',
                 phoneVerificationEnabled: true,
+                email: String(prevState.email || prevState.registrationEmailState?.current || '').trim() || null,
+                registrationEmailState: prevState.registrationEmailState && typeof prevState.registrationEmailState === 'object'
+                  ? { ...prevState.registrationEmailState }
+                  : {
+                    current: String(prevState.email || '').trim(),
+                    previous: String(prevState.email || '').trim(),
+                    source: 'normal_hero_start',
+                    updatedAt: 0,
+                  },
+                manualAddEmailInputRequired: Boolean(prevState.manualAddEmailInputRequired),
                 signupPhoneNumber: String(
                   prevState.signupPhoneNumber
                   || (String(prevState.accountIdentifierType || '').trim().toLowerCase() === 'phone' ? prevState.accountIdentifier : '')

@@ -20,6 +20,20 @@ function loadStep8Module() {
   return sandbox.self.MultiPageBackgroundStep8;
 }
 
+function loadMessageRouterModule() {
+  const sandbox = {
+    self: {},
+    console,
+    setTimeout,
+    clearTimeout,
+  };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(repoRoot, 'background/message-router.js'), 'utf8'),
+    sandbox
+  );
+  return sandbox.self.MultiPageBackgroundMessageRouter;
+}
+
 function createBaseDeps(calls = []) {
   return {
     addLog: async (message, level) => calls.push(['log', level || 'info', message]),
@@ -36,7 +50,55 @@ function createBaseDeps(calls = []) {
   };
 }
 
-test('Normal Hero add-email prompts manual email and retries when email is already used', async () => {
+test('Normal Hero auto-run payload stores startup email while preserving phone identity', async () => {
+  let state = {};
+  let started = null;
+  const patches = [];
+  const router = loadMessageRouterModule().createMessageRouter({
+    addLog: async () => {},
+    buildXiaohongshuRuntimeReset: () => ({}),
+    clearStopRequest: () => {},
+    getPendingAutoRunTimerPlan: () => null,
+    getState: async () => state,
+    isAutoRunLockedState: () => false,
+    normalizeRunCount: (value) => Math.max(1, Math.floor(Number(value) || 1)),
+    setState: async (patch) => {
+      patches.push(patch);
+      state = { ...state, ...patch };
+    },
+    startAutoRunLoop: (totalRuns, options) => {
+      started = { totalRuns, options };
+    },
+    validateAutoRunStart: () => ({ ok: true, errors: [] }),
+  });
+
+  const response = await router.handleMessage({
+    type: 'AUTO_RUN',
+    source: 'sidepanel',
+    payload: {
+      totalRuns: 1,
+      normalHeroModeEnabled: true,
+      signupPhoneNumber: '+57 (324) 132 10 49',
+      signupEmail: 'HeroUser@Example.COM',
+    },
+  }, {});
+
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), { ok: true });
+  assert.equal(state.normalHeroModeEnabled, true);
+  assert.equal(state.manualSignupPhoneSmsEnabled, true);
+  assert.equal(state.signupMethod, 'phone');
+  assert.equal(state.accountIdentifierType, 'phone');
+  assert.equal(state.accountIdentifier, '+57 (324) 132 10 49');
+  assert.equal(state.email, 'herouser@example.com');
+  assert.equal(state.registrationEmailState.current, 'herouser@example.com');
+  assert.equal(state.registrationEmailState.source, 'normal_hero_start');
+  assert.equal(state.manualAddEmailInputRequired, true);
+  assert.equal(started.totalRuns, 1);
+  assert.equal(started.options.normalHeroModeEnabled, true);
+  assert.ok(patches.some((patch) => patch.email === 'herouser@example.com'));
+});
+
+test('Normal Hero add-email uses startup email and only prompts after email is already used', async () => {
   const calls = [];
   let promptCount = 0;
   const executor = loadStep8Module().createStep8Executor({
@@ -44,6 +106,13 @@ test('Normal Hero add-email prompts manual email and retries when email is alrea
     getState: async () => ({
       normalHeroModeEnabled: true,
       signupPhoneNumber: '+57 (324) 132 10 49',
+      email: 'used@example.com',
+      registrationEmailState: {
+        current: 'used@example.com',
+        previous: 'used@example.com',
+        source: 'normal_hero_start',
+        updatedAt: 1,
+      },
     }),
     sendToContentScriptResilient: async (_target, message) => {
       calls.push(['content', message.type, message.payload]);
@@ -60,7 +129,7 @@ test('Normal Hero add-email prompts manual email and retries when email is alrea
     },
     requestManualAddEmailInput: async () => {
       promptCount += 1;
-      return promptCount === 1 ? 'used@example.com' : 'fresh@example.com';
+      return 'fresh@example.com';
     },
     persistRegistrationEmailState: async (_state, email, options) => calls.push(['persistEmail', email, options]),
     completeNodeFromBackground: async (nodeId, payload) => calls.push(['complete', nodeId, payload]),
@@ -69,12 +138,19 @@ test('Normal Hero add-email prompts manual email and retries when email is alrea
   await executor.executeBindEmail({
     normalHeroModeEnabled: true,
     signupPhoneNumber: '+57 (324) 132 10 49',
+    email: 'used@example.com',
+    registrationEmailState: {
+      current: 'used@example.com',
+      previous: 'used@example.com',
+      source: 'normal_hero_start',
+      updatedAt: 1,
+    },
     oauthUrl: 'https://example.test/oauth',
     nodeId: 'bind-email',
     visibleStep: 9,
   });
 
-  assert.equal(promptCount, 2);
+  assert.equal(promptCount, 1);
   assert.deepEqual(
     calls.filter((item) => item[0] === 'content' && item[1] === 'SUBMIT_ADD_EMAIL').map((item) => item[2].email),
     ['used@example.com', 'fresh@example.com']
@@ -89,6 +165,49 @@ test('Normal Hero add-email prompts manual email and retries when email is alrea
       manualAddEmailInputRequired: true,
     },
   ]);
+});
+
+test('Normal Hero add-email prompts manual email when startup email is missing', async () => {
+  const calls = [];
+  let promptCount = 0;
+  const executor = loadStep8Module().createStep8Executor({
+    ...createBaseDeps(calls),
+    getState: async () => ({
+      normalHeroModeEnabled: true,
+      signupPhoneNumber: '+57 (324) 132 10 49',
+    }),
+    sendToContentScriptResilient: async (_target, message) => {
+      calls.push(['content', message.type, message.payload]);
+      if (message.type === 'GET_LOGIN_AUTH_STATE') {
+        return { state: 'add_email_page', url: 'https://auth.openai.com/add-email' };
+      }
+      return {
+        displayedEmail: message.payload.email,
+        url: 'https://auth.openai.com/verify',
+      };
+    },
+    requestManualAddEmailInput: async () => {
+      promptCount += 1;
+      return 'fallback@example.com';
+    },
+    persistRegistrationEmailState: async (_state, email, options) => calls.push(['persistEmail', email, options]),
+    completeNodeFromBackground: async (nodeId, payload) => calls.push(['complete', nodeId, payload]),
+  });
+
+  await executor.executeBindEmail({
+    normalHeroModeEnabled: true,
+    signupPhoneNumber: '+57 (324) 132 10 49',
+    oauthUrl: 'https://example.test/oauth',
+    nodeId: 'bind-email',
+    visibleStep: 9,
+  });
+
+  assert.equal(promptCount, 1);
+  assert.deepEqual(
+    calls.filter((item) => item[0] === 'content' && item[1] === 'SUBMIT_ADD_EMAIL').map((item) => item[2].email),
+    ['fallback@example.com']
+  );
+  assert.equal(calls.find((item) => item[0] === 'complete')[2].email, 'fallback@example.com');
 });
 
 test('Normal Hero bind-email verification prompts manual code again after invalid code', async () => {

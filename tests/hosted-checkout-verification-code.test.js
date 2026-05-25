@@ -238,7 +238,9 @@ test('hosted PayPal no-SMS flow resends verification code up to three times', ()
     /const HOSTED_CHECKOUT_VERIFICATION_NO_SMS_RESEND_MAX_ATTEMPTS = 3;/
   );
   assert.match(createPlusCheckoutSource, /enableTestHooks = false/);
-  assert.match(createPlusCheckoutSource, /\.\.\.\(enableTestHooks \? \{ __test: \{\s*buildHostedCheckoutReplacementCard,\s*pollHostedCheckoutVerificationCodeWithResend,\s*\} \} : \{\}\)/);
+  assert.match(createPlusCheckoutSource, /enableTestHooks \? \{ __test: \{/);
+  assert.match(createPlusCheckoutSource, /buildHostedCheckoutReplacementCard,/);
+  assert.match(createPlusCheckoutSource, /pollHostedCheckoutVerificationCodeWithResend,/);
   assert.match(createPlusCheckoutSource, /async function pollHostedCheckoutVerificationCodeWithResend\(tabId, options = \{\}\)/);
   assert.match(createPlusCheckoutSource, /if \(isHostedCheckoutVerificationNoSmsError\(lastError\)\)/);
   assert.match(createPlusCheckoutSource, /tracker\.noSmsResendAttempts \+= 1;/);
@@ -313,4 +315,145 @@ test('hosted PayPal card decline replaces number expiry and cvv together', () =>
   assert.match(paypalFlowSource, /function hasPayPalHostedGuestCheckoutForm\(\)/);
   assert.match(paypalFlowSource, /hostedGuestCheckoutFormVisible/);
   assert.match(paypalFlowSource, /hostedCardDeclined: hasPayPalHostedCardDeclinedError\(\)/);
+});
+
+test('hosted checkout uses Hero email from state for PayPal guest profile', async () => {
+  const patches = [];
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+    getState: async () => ({
+      normalHeroModeEnabled: true,
+      email: 'HeroUser@Example.COM',
+      hostedCheckoutPhoneNumber: '5551112222',
+    }),
+    setState: async (patch) => patches.push(patch),
+    broadcastDataUpdate: (patch) => patches.push({ broadcast: patch }),
+    chrome: {
+      storage: {
+        local: {
+          get: async () => ({}),
+        },
+      },
+    },
+  });
+
+  const config = await executor.__test.getHostedCheckoutRuntimeConfig({ ensureEmail: true });
+  const profile = executor.__test.buildHostedCheckoutGuestProfile({}, config);
+
+  assert.equal(config.email, 'herouser@example.com');
+  assert.equal(profile.email, 'herouser@example.com');
+  assert.equal(patches.length, 0);
+});
+
+test('hosted checkout prompts for Hero email when payment page lacks email', async () => {
+  const patches = [];
+  const requests = [];
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+    getState: async () => ({
+      normalHeroModeEnabled: true,
+      signupPhoneNumber: '+57 (324) 132 10 49',
+    }),
+    requestManualAddEmailInput: async (payload) => {
+      requests.push(payload);
+      return 'FallbackHero@Example.COM';
+    },
+    setState: async (patch) => patches.push(patch),
+    broadcastDataUpdate: (patch) => patches.push({ broadcast: patch }),
+    chrome: {
+      storage: {
+        local: {
+          get: async () => ({}),
+        },
+      },
+    },
+  });
+
+  const email = await executor.__test.ensureHostedCheckoutEmail({
+    normalHeroModeEnabled: true,
+    signupPhoneNumber: '+57 (324) 132 10 49',
+  });
+
+  assert.equal(email, 'fallbackhero@example.com');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].phoneNumber, '+57 (324) 132 10 49');
+  assert.deepEqual(JSON.parse(JSON.stringify(patches[0])), {
+    email: 'fallbackhero@example.com',
+    registrationEmailState: {
+      current: 'fallbackhero@example.com',
+      previous: 'fallbackhero@example.com',
+      source: 'normal_hero_checkout',
+      updatedAt: patches[0].registrationEmailState.updatedAt,
+    },
+    manualAddEmailInputRequired: true,
+  });
+});
+
+test('hosted checkout automation sends Hero startup email to PayPal flow', async () => {
+  const paypalPayloads = [];
+  let paypalSubmitted = false;
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+    enableHostedCheckoutAutomation: true,
+    addLog: async () => {},
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        address: {
+          Address: '123 Main St',
+          City: 'New York',
+          State_Full: 'New York',
+          Zip_Code: '10001',
+        },
+      }),
+    }),
+    getState: async () => ({
+      normalHeroModeEnabled: true,
+      email: 'HeroUser@Example.COM',
+      hostedCheckoutPhoneNumber: '5551112222',
+    }),
+    chrome: {
+      tabs: {
+        get: async () => ({
+          id: 7,
+          url: paypalSubmitted
+            ? 'https://chatgpt.com/payments/success'
+            : 'https://www.paypal.com/checkoutweb/guest',
+        }),
+      },
+      storage: {
+        local: {
+          get: async () => ({}),
+        },
+      },
+    },
+    completeNodeFromBackground: async () => {},
+    ensureContentScriptReadyOnTabUntilStopped: async () => {},
+    sendTabMessageUntilStopped: async (_tabId, source, message = {}) => {
+      if (source === 'plus-checkout') {
+        return {};
+      }
+      if (message.type === 'PAYPAL_HOSTED_GET_STATE') {
+        return { hostedStage: 'guest_checkout' };
+      }
+      if (message.type === 'PAYPAL_RUN_HOSTED_CHECKOUT_STEP') {
+        paypalPayloads.push(message.payload);
+        paypalSubmitted = true;
+        return {};
+      }
+      return {};
+    },
+    sleepWithStop: async () => {},
+    waitForTabCompleteUntilStopped: async () => {},
+    waitForTabUrlMatchUntilStopped: async (_tabId, matcher) => {
+      const url = 'https://www.paypal.com/checkoutweb/guest';
+      return matcher(url) ? { id: 7, url } : null;
+    },
+  });
+
+  await executor.__test.runHostedCheckoutAutomation(7, { checkoutSessionId: 'cs_test' });
+
+  assert.equal(paypalPayloads.length, 1);
+  assert.equal(paypalPayloads[0].email, 'herouser@example.com');
 });

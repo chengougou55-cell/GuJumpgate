@@ -14064,6 +14064,7 @@ const plusCheckoutCreateExecutor = self.MultiPageBackgroundPlusCheckoutCreate?.c
   fetch: typeof fetch === 'function' ? fetch.bind(globalThis) : null,
   getState,
   requestStop,
+  requestManualAddEmailInput: requestNormalHeroAddEmailInput,
   getLastNodeIdForState,
   markCurrentRegistrationAccountUsed,
   registerTab,

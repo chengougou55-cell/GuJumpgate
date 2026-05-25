@@ -14110,6 +14110,7 @@ async function startAutoRunFromCurrentSettings(options = {}) {
       ...(normalHeroModeEnabled ? {
         normalHeroModeEnabled: true,
         signupPhoneNumber: normalHeroSignupPhoneNumber,
+        signupEmail: normalizeManualEmailInput(options?.signupEmail || latestState?.email || latestState?.registrationEmailState?.current || ''),
       } : {}),
     },
   });
@@ -14190,6 +14191,55 @@ async function openNormalHeroPhoneDialog() {
     confirmLabel: '开始',
   });
   return result ? normalizeManualPhoneNumberInput(result.phoneNumber) : '';
+}
+
+async function openNormalHeroStartDialog() {
+  if (!sharedFormDialog?.open) {
+    const phoneNumber = normalizeManualPhoneNumberInput(
+      window.prompt?.('请输入手机号，例如 +57 (324) 132 10 49') || ''
+    );
+    if (!phoneNumber) {
+      return null;
+    }
+    const email = normalizeManualEmailInput(
+      window.prompt?.('请输入后续绑定和支付要使用的邮箱') || ''
+    );
+    return email ? { phoneNumber, email } : null;
+  }
+  const result = await sharedFormDialog.open({
+    title: '普通Hero',
+    message: '请输入注册手机号和后续绑定、支付要使用的邮箱。',
+    fields: [{
+      key: 'phoneNumber',
+      label: '手机号',
+      type: 'text',
+      placeholder: '+57 (324) 132 10 49',
+      inputMode: 'tel',
+      autocomplete: 'tel',
+      required: true,
+      requiredMessage: '请输入手机号。',
+      normalize: (value) => String(value || '').trim().replace(/\s+/g, ' '),
+      validate: (value) => normalizeManualPhoneNumberInput(value) ? '' : '请输入有效手机号，建议包含国际区号。',
+    }, {
+      key: 'email',
+      label: '邮箱',
+      type: 'email',
+      placeholder: 'name@example.com',
+      inputMode: 'email',
+      autocomplete: 'email',
+      required: true,
+      requiredMessage: '请输入邮箱。',
+      normalize: (value) => String(value || '').trim().toLowerCase(),
+      validate: (value) => normalizeManualEmailInput(value) ? '' : '请输入有效邮箱地址。',
+    }],
+    confirmLabel: '开始',
+  });
+  if (!result) {
+    return null;
+  }
+  const phoneNumber = normalizeManualPhoneNumberInput(result.phoneNumber);
+  const email = normalizeManualEmailInput(result.email);
+  return phoneNumber && email ? { phoneNumber, email } : null;
 }
 
 async function openNormalHeroSmsCodeDialog(options = {}) {
@@ -14367,13 +14417,14 @@ async function startXiaohongshuAutoRunFromCurrentSettings() {
 }
 
 async function startNormalHeroAutoRunFromCurrentSettings() {
-  const phoneNumber = await openNormalHeroPhoneDialog();
-  if (!phoneNumber) {
+  const identity = await openNormalHeroStartDialog();
+  if (!identity?.phoneNumber || !identity?.email) {
     return false;
   }
   return startAutoRunFromCurrentSettings({
     normalHeroModeEnabled: true,
-    signupPhoneNumber: phoneNumber,
+    signupPhoneNumber: identity.phoneNumber,
+    signupEmail: identity.email,
   });
 }
 

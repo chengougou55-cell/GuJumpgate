@@ -147,7 +147,25 @@
       return shouldPromptManualAddEmail(state) && Boolean(state?.manualAddEmailInputRequired);
     }
 
-    async function requestManualAddEmailForFlow(state = {}, visibleStep = 0) {
+    function getManualAddEmailFromState(state = {}) {
+      return normalizeManualAddEmail(
+        state?.email
+        || state?.registrationEmailState?.current
+        || state?.registrationEmailState?.previous
+        || ''
+      );
+    }
+
+    async function requestManualAddEmailForFlow(state = {}, visibleStep = 0, options = {}) {
+      const existingEmail = options?.forcePrompt ? '' : getManualAddEmailFromState(state);
+      if (existingEmail) {
+        await addLog(
+          `步骤 ${visibleStep || 0}：检测到 add-email 页面，将使用普通Hero启动邮箱 ${existingEmail}。`,
+          'info',
+          { step: visibleStep, stepKey: activeFetchLoginCodeStepKey || 'bind-email' }
+        );
+        return existingEmail;
+      }
       if (typeof requestManualAddEmailInput !== 'function') {
         throw new Error(`步骤 ${visibleStep || 0}：普通Hero添加邮箱输入弹窗不可用，请刷新侧边栏后重试。`);
       }
@@ -287,10 +305,13 @@
       let resolvedEmail = '';
       let result = null;
       const maxAttempts = manualAddEmailMode ? MANUAL_ADD_EMAIL_MAX_ATTEMPTS : 1;
+      let forceManualAddEmailPrompt = false;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         resolvedEmail = manualAddEmailMode
-          ? await requestManualAddEmailForFlow(latestState, visibleStep)
+          ? await requestManualAddEmailForFlow(latestState, visibleStep, {
+            forcePrompt: forceManualAddEmailPrompt,
+          })
           : await resolveSignupEmailForFlow(latestState, {
             preserveAccountIdentity: true,
           });
@@ -323,6 +344,7 @@
           'warn',
           { step: visibleStep, stepKey: activeFetchLoginCodeStepKey || 'bind-email' }
         );
+        forceManualAddEmailPrompt = true;
         latestState = typeof getState === 'function' ? await getState() : latestState;
       }
 

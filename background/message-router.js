@@ -359,6 +359,11 @@
       return digits.length >= 7 ? normalized : '';
     }
 
+    function normalizeNormalHeroEmail(value = '') {
+      const normalized = String(value || '').trim().toLowerCase();
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
+    }
+
     function isNormalHeroAutoRunPayload(payload = {}) {
       return Boolean(payload?.normalHeroModeEnabled);
     }
@@ -375,6 +380,16 @@
       if (!phoneNumber) {
         throw new Error('普通Hero模式缺少注册手机号，请先填写手机号。');
       }
+      const email = normalizeNormalHeroEmail(
+        payload.signupEmail
+        || payload.email
+        || state?.email
+        || state?.registrationEmailState?.current
+        || ''
+      );
+      if (!email) {
+        throw new Error('普通Hero模式缺少邮箱，请先填写后续绑定和支付要使用的邮箱。');
+      }
       return {
         normalHeroModeEnabled: true,
         manualSignupPhoneSmsEnabled: true,
@@ -386,6 +401,14 @@
         signupPhoneNumber: phoneNumber,
         accountIdentifierType: 'phone',
         accountIdentifier: phoneNumber,
+        email,
+        registrationEmailState: {
+          current: email,
+          previous: email,
+          source: 'normal_hero_start',
+          updatedAt: Date.now(),
+        },
+        manualAddEmailInputRequired: true,
         signupPhoneActivation: null,
         signupPhoneCompletedActivation: null,
         currentPhoneVerificationCode: '',
