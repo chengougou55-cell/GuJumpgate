@@ -280,6 +280,150 @@ function findHostedOpenAiSubmitButton() {
   }) || null;
 }
 
+function normalizeHostedOpenAiEmail(value = '') {
+  const email = normalizeText(value).toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+}
+
+function findHostedOpenAiEmailInput() {
+  const selectors = [
+    '#email',
+    '#emailAddress',
+    '#billingEmail',
+    '#customerEmail',
+    'input[type="email"]',
+    'input[autocomplete="email"]',
+    'input[name="email"]',
+    'input[name="emailAddress"]',
+    'input[name="billingEmail"]',
+    'input[name="billing_details[email]"]',
+    'input[name="email_address"]',
+  ];
+  for (const selector of selectors) {
+    const input = document.querySelector(selector);
+    if (input && isVisibleElement(input) && isEnabledControl(input)) {
+      return input;
+    }
+  }
+  return findInputByFieldText([
+    /email|e-mail|mail/i,
+    /电子邮件|邮箱/i,
+  ]);
+}
+
+function findHostedOpenAiEmailSubmitButton() {
+  const direct = document.querySelector('button[data-atomic-wait-intent="Submit_Email"]')
+    || document.querySelector('button[data-testid="submit-email-button"]')
+    || document.querySelector('button[data-testid="email-submit-button"]');
+  if (direct && isVisibleElement(direct) && isEnabledControl(direct)) {
+    return direct;
+  }
+  const buttons = Array.from(document.querySelectorAll('button')).filter((button) => (
+    isVisibleElement(button) && isEnabledControl(button)
+  ));
+  return buttons.find((button) => {
+    const text = normalizeText(button.textContent || button.getAttribute?.('aria-label') || '');
+    return text === '下一页'
+      || /^next$/i.test(text)
+      || /^continue$/i.test(text);
+  }) || null;
+}
+
+function hasHostedOpenAiStructuredAddressInput() {
+  const fields = getStructuredAddressFields();
+  return Boolean(fields.address1 || fields.city || fields.postalCode);
+}
+
+function hasHostedOpenAiOnlyEmailStep() {
+  return Boolean(
+    findHostedOpenAiEmailInput()
+    && !hasHostedOpenAiStructuredAddressInput()
+    && findHostedOpenAiEmailSubmitButton()
+  );
+}
+
+async function waitForHostedOpenAiEmailInput(timeoutMs = 6000) {
+  const effectiveTimeoutMs = Math.max(0, Math.floor(Number(timeoutMs) || 0));
+  if (effectiveTimeoutMs <= 0) {
+    return findHostedOpenAiEmailInput();
+  }
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= effectiveTimeoutMs) {
+    throwIfStopped();
+    const input = findHostedOpenAiEmailInput();
+    if (input) {
+      return input;
+    }
+    await sleep(250);
+  }
+  return null;
+}
+
+async function fillHostedOpenAiEmailIfEmpty(email = '', options = {}) {
+  const normalizedEmail = normalizeHostedOpenAiEmail(email);
+  if (!normalizedEmail) {
+    return {
+      emailInputFound: false,
+      emailFilled: false,
+    };
+  }
+  const input = await waitForHostedOpenAiEmailInput(options.timeoutMs);
+  if (!input) {
+    return {
+      emailInputFound: false,
+      emailFilled: false,
+      email: normalizedEmail,
+    };
+  }
+  if (normalizeText(input.value || '')) {
+    return {
+      emailInputFound: true,
+      emailFilled: false,
+      emailAlreadyPresent: true,
+      email: normalizeText(input.value || ''),
+    };
+  }
+  fillInput(input, normalizedEmail);
+  await sleep(300);
+  return {
+    emailInputFound: true,
+    emailFilled: true,
+    email: normalizedEmail,
+  };
+}
+
+async function advanceHostedOpenAiEmailStepIfNeeded(emailResult = {}) {
+  if (!emailResult?.emailInputFound || !hasHostedOpenAiOnlyEmailStep()) {
+    return {
+      emailStepAdvanced: false,
+    };
+  }
+  const button = findHostedOpenAiEmailSubmitButton();
+  if (!button || button.disabled || button.getAttribute?.('aria-disabled') === 'true') {
+    return {
+      emailStepAdvanced: false,
+    };
+  }
+  dispatchHostedOpenAiClick(button);
+  await waitUntil(() => hasHostedOpenAiStructuredAddressInput(), {
+    label: 'hosted checkout 邮箱提交后的账单地址字段',
+    intervalMs: 250,
+    timeoutMs: 10000,
+  });
+  await sleep(500);
+  return {
+    emailStepAdvanced: true,
+  };
+}
+
+async function waitForHostedOpenAiStructuredAddressInput(timeoutMs = 8000) {
+  return waitUntil(() => hasHostedOpenAiStructuredAddressInput(), {
+    label: 'hosted checkout 账单地址字段',
+    intervalMs: 250,
+    timeoutMs,
+  });
+}
+
 function dispatchHostedOpenAiClick(button) {
   const rect = button.getBoundingClientRect();
   const clientX = rect.left + rect.width / 2;
@@ -417,7 +561,12 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
 
   await sleep(3000);
 
+  const emailResult = await fillHostedOpenAiEmailIfEmpty(payload.email || payload.billingEmail || '', {
+    timeoutMs: 8000,
+  });
+  const emailStepResult = await advanceHostedOpenAiEmailStepIfNeeded(emailResult);
   const address = payload.address && typeof payload.address === 'object' ? payload.address : {};
+  await waitForHostedOpenAiStructuredAddressInput(10000);
   await selectCountryDropdown(findCountryDropdown(), 'US');
   fillHostedOpenAiInputBySelector('#billingAddressLine1', address.street || '');
   fillHostedOpenAiInputBySelector('#billingLocality', address.city || '');
@@ -439,6 +588,9 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
   const clickResult = await clickHostedOpenAiSubmitButton(0);
   return {
     ...clickResult,
+    emailInputFound: Boolean(emailResult?.emailInputFound),
+    emailFilled: Boolean(emailResult?.emailFilled),
+    emailStepAdvanced: Boolean(emailStepResult?.emailStepAdvanced),
     hostedVerificationVisible: hasHostedOpenAiVerificationPopup(),
   };
 }

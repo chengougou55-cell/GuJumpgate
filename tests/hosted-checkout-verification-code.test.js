@@ -14,6 +14,10 @@ const paypalFlowSource = fs.readFileSync(
   path.join(repoRoot, 'content/paypal-flow.js'),
   'utf8'
 );
+const plusCheckoutSource = fs.readFileSync(
+  path.join(repoRoot, 'content/plus-checkout.js'),
+  'utf8'
+);
 
 function createExecutorWithPayload(payload) {
   return globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
@@ -391,6 +395,7 @@ test('hosted checkout prompts for Hero email when payment page lacks email', asy
 
 test('hosted checkout automation sends Hero startup email to PayPal flow', async () => {
   const paypalPayloads = [];
+  const openAiPayloads = [];
   let paypalSubmitted = false;
   const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
     enableTestHooks: true,
@@ -432,6 +437,9 @@ test('hosted checkout automation sends Hero startup email to PayPal flow', async
     ensureContentScriptReadyOnTabUntilStopped: async () => {},
     sendTabMessageUntilStopped: async (_tabId, source, message = {}) => {
       if (source === 'plus-checkout') {
+        if (message.type === 'RUN_HOSTED_OPENAI_CHECKOUT_STEP') {
+          openAiPayloads.push(message.payload);
+        }
         return {};
       }
       if (message.type === 'PAYPAL_HOSTED_GET_STATE') {
@@ -454,6 +462,19 @@ test('hosted checkout automation sends Hero startup email to PayPal flow', async
 
   await executor.__test.runHostedCheckoutAutomation(7, { checkoutSessionId: 'cs_test' });
 
+  assert.equal(openAiPayloads.length, 1);
+  assert.equal(openAiPayloads[0].email, 'herouser@example.com');
   assert.equal(paypalPayloads.length, 1);
   assert.equal(paypalPayloads[0].email, 'herouser@example.com');
+});
+
+test('hosted OpenAI checkout waits for and advances empty email step before address fill', () => {
+  assert.match(plusCheckoutSource, /async function waitForHostedOpenAiEmailInput\(timeoutMs = 6000\)/);
+  assert.match(plusCheckoutSource, /const input = await waitForHostedOpenAiEmailInput\(options\.timeoutMs\);/);
+  assert.match(plusCheckoutSource, /function findHostedOpenAiEmailSubmitButton\(\)/);
+  assert.match(plusCheckoutSource, /async function advanceHostedOpenAiEmailStepIfNeeded\(emailResult = \{\}\)/);
+  assert.match(plusCheckoutSource, /const button = findHostedOpenAiEmailSubmitButton\(\);/);
+  assert.match(plusCheckoutSource, /dispatchHostedOpenAiClick\(button\);/);
+  assert.match(plusCheckoutSource, /waitForHostedOpenAiStructuredAddressInput\(10000\);/);
+  assert.match(plusCheckoutSource, /emailStepAdvanced: Boolean\(emailStepResult\?\.emailStepAdvanced\)/);
 });

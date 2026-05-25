@@ -1883,11 +1883,19 @@ function FindProxyForURL(url, host) {
         type: 'RUN_HOSTED_OPENAI_CHECKOUT_STEP',
         source: 'background',
         payload: {
+          email: guestProfile.email,
           address: guestProfile.address,
         },
       });
       if (initialResult?.error) {
         throw new Error(initialResult.error);
+      }
+      if (guestProfile.email && initialResult?.emailInputFound === false) {
+        await addLog('步骤 6：hosted checkout 未检测到可填写的邮箱输入框，可能页面已带邮箱或字段结构已变化，将继续观察后续跳转。', 'warn');
+      } else if (initialResult?.emailFilled) {
+        await addLog('步骤 6：hosted checkout 支付页邮箱为空，已填写本轮 Hero 邮箱。', 'info');
+      } else if (initialResult?.emailStepAdvanced) {
+        await addLog('步骤 6：hosted checkout 已提交邮箱步骤并进入账单地址页。', 'info');
       }
 
       const startedAt = Date.now();
