@@ -561,6 +561,7 @@
       const autoRunRetryNonFreeTrial = Boolean(options.autoRunRetryNonFreeTrial);
       const autoRunRetryPaypalCallback = Boolean(options.autoRunRetryPaypalCallback);
       const preserveXiaohongshuRuntime = Boolean(options.xiaohongshuModeEnabled);
+      const preserveNormalHeroRuntime = Boolean(options.normalHeroModeEnabled);
       const initialMode = options.mode === 'continue' ? 'continue' : 'restart';
       const preflightState = await getState();
       const resetStaleXiaohongshuRuntime = !preserveXiaohongshuRuntime && Boolean(preflightState?.xiaohongshuModeEnabled);
@@ -655,6 +656,7 @@
 
           if (!useExistingProgress) {
             const prevState = await getState();
+            const shouldPreserveNormalHeroRuntime = preserveNormalHeroRuntime || Boolean(prevState.normalHeroModeEnabled);
             const keepSettings = {
               vpsUrl: prevState.vpsUrl,
               vpsPassword: prevState.vpsPassword,
@@ -680,6 +682,7 @@
               autoRunDelayMinutes: prevState.autoRunDelayMinutes,
               autoStepDelaySeconds: prevState.autoStepDelaySeconds,
               signupMethod: prevState.signupMethod,
+              phoneVerificationEnabled: prevState.phoneVerificationEnabled,
               mailProvider: prevState.mailProvider,
               emailGenerator: prevState.emailGenerator,
               gmailBaseEmail: prevState.gmailBaseEmail,
@@ -693,6 +696,32 @@
               cloudflareDomain: prevState.cloudflareDomain,
               cloudflareDomains: prevState.cloudflareDomains,
               reusablePhoneActivation: prevState.reusablePhoneActivation,
+              ...(shouldPreserveNormalHeroRuntime ? {
+                normalHeroModeEnabled: true,
+                manualSignupPhoneSmsEnabled: true,
+                signupMethod: 'phone',
+                resolvedSignupMethod: 'phone',
+                phoneVerificationEnabled: true,
+                signupPhoneNumber: String(
+                  prevState.signupPhoneNumber
+                  || (String(prevState.accountIdentifierType || '').trim().toLowerCase() === 'phone' ? prevState.accountIdentifier : '')
+                  || ''
+                ).trim(),
+                accountIdentifierType: 'phone',
+                accountIdentifier: String(
+                  prevState.signupPhoneNumber
+                  || (String(prevState.accountIdentifierType || '').trim().toLowerCase() === 'phone' ? prevState.accountIdentifier : '')
+                  || ''
+                ).trim(),
+                signupPhoneActivation: null,
+                signupPhoneCompletedActivation: null,
+                currentPhoneVerificationCode: '',
+                signupPhoneVerificationRequestedAt: null,
+                signupPhoneVerificationPurpose: '',
+              } : {
+                normalHeroModeEnabled: false,
+                manualSignupPhoneSmsEnabled: false,
+              }),
               ...(preserveXiaohongshuRuntime ? {
                 xiaohongshuModeEnabled: true,
                 xiaohongshuAccessToken: prevState.xiaohongshuAccessToken,

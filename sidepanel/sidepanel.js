@@ -2033,10 +2033,11 @@ function openAutoStartChoiceDialog(startStep, options = {}) {
 function openAutoRunModeDialog() {
   return openActionModal({
     title: '选择自动模式',
-    message: '普通模式会按完整注册流程执行。小红书模式会跳过前置注册/登录，通过 accessToken 从创建 Plus Checkout 开始，成功后继续执行后续导入 SESSION 节点。',
+    message: '普通模式会按完整注册流程执行。普通Hero会使用手动手机号注册，并在短信验证码阶段弹窗等待人工输入。小红书模式会跳过前置注册/登录，通过 accessToken 从创建 Plus Checkout 开始，成功后继续执行后续导入 SESSION 节点。',
     actions: [
       { id: null, label: '取消', variant: 'btn-ghost' },
       { id: 'xiaohongshu', label: '小红书模式', variant: 'btn-outline' },
+      { id: 'normal-hero', label: '普通Hero', variant: 'btn-outline' },
       { id: 'normal', label: '普通模式', variant: 'btn-primary' },
     ],
   });
@@ -13958,13 +13959,18 @@ autoStartMessage?.addEventListener('click', (event) => {
 });
 btnAutoStartClose?.addEventListener('click', () => resolveModalChoice(null));
 
-async function startAutoRunFromCurrentSettings() {
-  const initialLockedRunCount = typeof getLockedRunCountFromEmailPool === 'function'
+async function startAutoRunFromCurrentSettings(options = {}) {
+  const normalHeroModeEnabled = Boolean(options?.normalHeroModeEnabled);
+  const normalHeroSignupPhoneNumber = normalizeManualPhoneNumberInput(options?.signupPhoneNumber || '');
+  const emailPoolLockedRunCount = typeof getLockedRunCountFromEmailPool === 'function'
     ? getLockedRunCountFromEmailPool()
     : 0;
+  const initialLockedRunCount = normalHeroModeEnabled
+    ? 0
+    : emailPoolLockedRunCount;
   const requestedTotalRuns = initialLockedRunCount > 0
     ? initialLockedRunCount
-    : getRunCountValue();
+    : (normalHeroModeEnabled ? 1 : getRunCountValue());
   registerPendingAutoRunStartRunCount(requestedTotalRuns);
 
   try {
@@ -13987,14 +13993,18 @@ async function startAutoRunFromCurrentSettings() {
     const validationState = {
       ...(latestState || {}),
       panelMode: typeof getSelectedPanelMode === 'function' ? getSelectedPanelMode() : latestState?.panelMode,
-      signupMethod: typeof getSelectedSignupMethod === 'function' ? getSelectedSignupMethod() : latestState?.signupMethod,
+      signupMethod: normalHeroModeEnabled
+        ? 'phone'
+        : (typeof getSelectedSignupMethod === 'function' ? getSelectedSignupMethod() : latestState?.signupMethod),
       phoneVerificationEnabled: typeof inputPhoneVerificationEnabled !== 'undefined' && inputPhoneVerificationEnabled
-        ? Boolean(inputPhoneVerificationEnabled.checked)
+        ? Boolean(inputPhoneVerificationEnabled.checked || normalHeroModeEnabled)
         : Boolean(latestState?.phoneVerificationEnabled),
+      normalHeroModeEnabled,
+      manualSignupPhoneSmsEnabled: normalHeroModeEnabled,
       plusModeEnabled: typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
         ? Boolean(inputPlusModeEnabled.checked)
         : Boolean(latestState?.plusModeEnabled),
-      contributionMode: Boolean(latestState?.contributionMode),
+      contributionMode: normalHeroModeEnabled ? false : Boolean(latestState?.contributionMode),
     };
     return registry.validateAutoRunStart({
       activeFlowId: validationState.activeFlowId,
@@ -14030,13 +14040,11 @@ async function startAutoRunFromCurrentSettings() {
 
   const customEmailPoolEnabled = typeof usesCustomEmailPoolGenerator === 'function'
     && usesCustomEmailPoolGenerator();
-  const lockedRunCount = typeof getLockedRunCountFromEmailPool === 'function'
-    ? getLockedRunCountFromEmailPool()
-    : 0;
-  if (customEmailPoolEnabled && lockedRunCount <= 0) {
+  const lockedRunCount = normalHeroModeEnabled ? 0 : emailPoolLockedRunCount;
+  if (customEmailPoolEnabled && emailPoolLockedRunCount <= 0) {
     throw new Error('请先在邮箱池里至少填写 1 个邮箱。');
   }
-  const totalRuns = lockedRunCount > 0 ? lockedRunCount : requestedTotalRuns;
+  const totalRuns = normalHeroModeEnabled ? 1 : (lockedRunCount > 0 ? lockedRunCount : requestedTotalRuns);
   registerPendingAutoRunStartRunCount(totalRuns);
   if (lockedRunCount > 0) {
     inputRunCount.value = String(lockedRunCount);
@@ -14077,7 +14085,10 @@ async function startAutoRunFromCurrentSettings() {
 
   btnAutoRun.disabled = true;
   inputRunCount.disabled = true;
-  const delayEnabled = inputAutoDelayEnabled.checked;
+  const delayEnabled = normalHeroModeEnabled ? false : inputAutoDelayEnabled.checked;
+  if (normalHeroModeEnabled && inputAutoDelayEnabled.checked) {
+    showToast('普通Hero需要实时输入短信验证码，已忽略计划启动并立即运行。', 'warn', 2200);
+  }
   const delayMinutes = normalizeAutoDelayMinutes(inputAutoDelayMinutes.value);
   inputAutoDelayMinutes.value = String(delayMinutes);
   btnAutoRun.innerHTML = delayEnabled
@@ -14092,10 +14103,14 @@ async function startAutoRunFromCurrentSettings() {
       autoRunSkipFailures,
       autoRunRetryNonFreeTrial,
       autoRunRetryPaypalCallback,
-      contributionMode: Boolean(latestState?.contributionMode),
+      contributionMode: normalHeroModeEnabled ? false : Boolean(latestState?.contributionMode),
       contributionNickname,
       contributionQq,
       mode,
+      ...(normalHeroModeEnabled ? {
+        normalHeroModeEnabled: true,
+        signupPhoneNumber: normalHeroSignupPhoneNumber,
+      } : {}),
     },
   });
   if (response?.error) {
@@ -14134,6 +14149,69 @@ function extractAccessTokenFromInput(value = '') {
     return String(match[1] || '').trim();
   }
   return text.replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '').trim();
+}
+
+function normalizeManualPhoneNumberInput(value = '') {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  const digits = normalized.replace(/\D+/g, '');
+  return digits.length >= 7 ? normalized : '';
+}
+
+function normalizeManualSmsCodeInput(value = '') {
+  const normalized = String(value || '').trim().replace(/[^\d]/g, '');
+  return /^\d{4,8}$/.test(normalized) ? normalized : '';
+}
+
+async function openNormalHeroPhoneDialog() {
+  if (!sharedFormDialog?.open) {
+    const fallback = window.prompt?.('请输入手机号，例如 +57 (324) 132 10 49') || '';
+    return normalizeManualPhoneNumberInput(fallback);
+  }
+  const result = await sharedFormDialog.open({
+    title: '普通Hero',
+    message: '请输入注册手机号，程序会根据号码区号自动选择国家/地区。',
+    fields: [{
+      key: 'phoneNumber',
+      label: '手机号',
+      type: 'text',
+      placeholder: '+57 (324) 132 10 49',
+      inputMode: 'tel',
+      autocomplete: 'tel',
+      required: true,
+      requiredMessage: '请输入手机号。',
+      normalize: (value) => String(value || '').trim().replace(/\s+/g, ' '),
+      validate: (value) => normalizeManualPhoneNumberInput(value) ? '' : '请输入有效手机号，建议包含国际区号。',
+    }],
+    confirmLabel: '开始',
+  });
+  return result ? normalizeManualPhoneNumberInput(result.phoneNumber) : '';
+}
+
+async function openNormalHeroSmsCodeDialog(options = {}) {
+  if (!sharedFormDialog?.open) {
+    const fallback = window.prompt?.('请输入收到的短信验证码') || '';
+    return normalizeManualSmsCodeInput(fallback);
+  }
+  const phoneNumber = String(options.phoneNumber || latestState?.signupPhoneNumber || '').trim();
+  const result = await sharedFormDialog.open({
+    title: String(options.title || '').trim() || '普通Hero短信验证码',
+    message: String(options.message || '').trim()
+      || (phoneNumber ? `请输入 ${phoneNumber} 收到的短信验证码。` : '请输入收到的短信验证码。'),
+    fields: [{
+      key: 'code',
+      label: '短信验证码',
+      type: 'text',
+      placeholder: '请输入验证码',
+      inputMode: 'numeric',
+      autocomplete: 'one-time-code',
+      required: true,
+      requiredMessage: '请输入短信验证码。',
+      normalize: (value) => String(value || '').trim().replace(/[^\d]/g, ''),
+      validate: (value) => normalizeManualSmsCodeInput(value) ? '' : '验证码应为 4-8 位数字。',
+    }],
+    confirmLabel: '提交验证码',
+  });
+  return result ? normalizeManualSmsCodeInput(result.code) : '';
 }
 
 async function openXiaohongshuAccessTokenDialog() {
@@ -14229,6 +14307,17 @@ async function startXiaohongshuAutoRunFromCurrentSettings() {
   return true;
 }
 
+async function startNormalHeroAutoRunFromCurrentSettings() {
+  const phoneNumber = await openNormalHeroPhoneDialog();
+  if (!phoneNumber) {
+    return false;
+  }
+  return startAutoRunFromCurrentSettings({
+    normalHeroModeEnabled: true,
+    signupPhoneNumber: phoneNumber,
+  });
+}
+
 // Auto Run
 btnAutoRun.addEventListener('click', async () => {
   try {
@@ -14238,6 +14327,10 @@ btnAutoRun.addEventListener('click', async () => {
     }
     if (mode === 'xiaohongshu') {
       await startXiaohongshuAutoRunFromCurrentSettings();
+      return;
+    }
+    if (mode === 'normal-hero') {
+      await startNormalHeroAutoRunFromCurrentSettings();
       return;
     }
     await startAutoRunFromCurrentSettings();
@@ -16740,6 +16833,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       (async () => {
         const result = await openGoPayOtpInputDialog(message.payload || {});
         sendResponse(result || { cancelled: true, code: '' });
+      })().catch((err) => {
+        sendResponse({ error: err.message });
+      });
+      return true;
+    }
+
+    case 'REQUEST_NORMAL_HERO_SMS_CODE_INPUT': {
+      (async () => {
+        const code = await openNormalHeroSmsCodeDialog(message.payload || {});
+        sendResponse(code ? { ok: true, code } : { error: '已取消普通Hero短信验证码输入' });
       })().catch((err) => {
         sendResponse({ error: err.message });
       });

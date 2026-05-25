@@ -13848,6 +13848,17 @@ const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.crea
   getOAuthFlowRemainingMs,
   getOAuthFlowStepTimeoutMs,
   getState,
+  requestManualPhoneSmsCodeInput: (payload = {}) => chrome.runtime.sendMessage({
+    type: 'REQUEST_NORMAL_HERO_SMS_CODE_INPUT',
+    payload,
+  }).then((response) => {
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+    return response?.code || '';
+  }).catch((error) => {
+    throw new Error(`普通Hero短信验证码输入弹窗不可用，请保持侧边栏打开后重试。${error?.message || error || ''}`);
+  }),
   HERO_SMS_COUNTRY_ID,
   HERO_SMS_COUNTRY_LABEL,
   HERO_SMS_SERVICE_CODE,

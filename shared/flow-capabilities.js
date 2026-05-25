@@ -237,9 +237,10 @@
         ? requestedPanelMode
         : supportedPanelModes[0];
       const panelState = getPanelCapabilities(effectivePanelMode);
+      const normalHeroModeEnabled = Boolean(state?.normalHeroModeEnabled);
       const runtimeLocks = {
         autoRunLocked: Boolean(options?.autoRunLocked ?? state?.autoRunLocked),
-        contributionMode: flowState.supportsContributionMode && Boolean(state?.contributionMode),
+        contributionMode: flowState.supportsContributionMode && Boolean(state?.contributionMode) && !normalHeroModeEnabled,
         phoneVerificationEnabled: flowState.supportsPhoneVerificationSettings && Boolean(state?.phoneVerificationEnabled),
         plusModeEnabled: flowState.supportsPlusMode && Boolean(state?.plusModeEnabled),
         settingsMenuLocked: Boolean(options?.settingsMenuLocked ?? state?.settingsMenuLocked),
@@ -251,7 +252,7 @@
       const canSelectPhoneSignup = Boolean(flowState.supportsPhoneSignup)
         && Boolean(panelState.supportsPhoneSignup)
         && runtimeLocks.phoneVerificationEnabled
-        && !runtimeLocks.plusModeEnabled
+        && (!runtimeLocks.plusModeEnabled || normalHeroModeEnabled)
         && !runtimeLocks.contributionMode;
       if (canSelectPhoneSignup) {
         effectiveSignupMethods.push(SIGNUP_METHOD_PHONE);

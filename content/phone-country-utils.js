@@ -17,6 +17,10 @@
     '43', '41', '40', '39', '36', '34', '33', '32', '31', '30', '27', '20', '7', '1',
   ]);
 
+  const DIAL_CODE_REGION_CODES = Object.freeze({
+    57: ['CO'],
+  });
+
   function normalizePhoneDigits(value) {
     let digits = String(value || '').replace(/\D+/g, '');
     if (digits.startsWith('00')) {
@@ -94,6 +98,54 @@
     } catch {
       return '';
     }
+  }
+
+  function getConfigPageLocale(config = {}) {
+    return String(
+      config.pageLocale
+      || config.document?.documentElement?.lang
+      || config.document?.documentElement?.getAttribute?.('lang')
+      || config.navigator?.language
+      || (typeof document !== 'undefined' ? document?.documentElement?.lang : '')
+      || (typeof navigator !== 'undefined' ? navigator?.language : '')
+      || ''
+    ).trim();
+  }
+
+  function getDialCodeRegionMatchLabels(dialCode = '', config = {}) {
+    const labels = new Set();
+    const addLabel = (value) => {
+      const label = String(value || '').trim();
+      if (label) {
+        labels.add(label);
+      }
+    };
+    const normalizedDialCode = normalizePhoneDigits(dialCode);
+    const regionCodes = DIAL_CODE_REGION_CODES[normalizedDialCode] || [];
+    const pageLocale = getConfigPageLocale(config);
+    regionCodes.forEach((regionCode) => {
+      addLabel(regionCode);
+      addLabel(getRegionDisplayName(regionCode, 'en'));
+      if (pageLocale && !/^en(?:[-_]|$)/i.test(pageLocale)) {
+        addLabel(getRegionDisplayName(regionCode, pageLocale));
+      }
+    });
+    return Array.from(labels);
+  }
+
+  function doesTextMatchDialCodeRegion(text, dialCode = '', config = {}) {
+    const normalizedText = normalizeCountryLabel(text);
+    if (!normalizedText) {
+      return false;
+    }
+    return getDialCodeRegionMatchLabels(dialCode, config)
+      .map((label) => normalizeCountryLabel(label))
+      .filter(Boolean)
+      .some((target) => (
+        normalizedText === target
+        || (target.length > 1 && normalizedText.includes(target))
+        || (normalizedText.length > 2 && target.includes(normalizedText))
+      ));
   }
 
   function getOptionLabel(option) {
@@ -196,7 +248,27 @@
       bestMatch = option;
       bestDialCodeLength = dialCode.length;
     }
-    return bestMatch;
+    if (bestMatch) {
+      return bestMatch;
+    }
+
+    const dialCode = resolveDialCodeFromPhoneNumber(phoneNumber);
+    const targetRegions = DIAL_CODE_REGION_CODES[dialCode] || [];
+    if (targetRegions.length > 0) {
+      const byRegionValue = source.find((option) => (
+        targetRegions.includes(normalizeCountryOptionValue(option?.value))
+      ));
+      if (byRegionValue) {
+        return byRegionValue;
+      }
+      return source.find((option) => (
+        getOptionMatchLabels(option, config).some((label) => (
+          doesTextMatchDialCodeRegion(label, dialCode, config)
+        ))
+      )) || null;
+    }
+
+    return null;
   }
 
   function findElementByDialCode(elements, phoneNumber, config = {}) {
@@ -217,7 +289,14 @@
       bestMatch = element;
       bestDialCodeLength = dialCode.length;
     }
-    return bestMatch;
+    if (bestMatch) {
+      return bestMatch;
+    }
+
+    const dialCode = resolveDialCodeFromPhoneNumber(phoneNumber);
+    return source.find((element) => (
+      doesTextMatchDialCodeRegion(getText(element), dialCode, config)
+    )) || null;
   }
 
   return {

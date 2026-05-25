@@ -353,6 +353,47 @@
       ).trim();
     }
 
+    function normalizeNormalHeroPhoneNumber(value = '') {
+      const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+      const digits = normalized.replace(/\D+/g, '');
+      return digits.length >= 7 ? normalized : '';
+    }
+
+    function isNormalHeroAutoRunPayload(payload = {}) {
+      return Boolean(payload?.normalHeroModeEnabled);
+    }
+
+    function buildNormalHeroAutoRunStateUpdates(state = {}, payload = {}) {
+      if (!isNormalHeroAutoRunPayload(payload)) {
+        return null;
+      }
+      const phoneNumber = normalizeNormalHeroPhoneNumber(
+        payload.signupPhoneNumber
+        || state?.signupPhoneNumber
+        || (String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone' ? state?.accountIdentifier : '')
+      );
+      if (!phoneNumber) {
+        throw new Error('普通Hero模式缺少注册手机号，请先填写手机号。');
+      }
+      return {
+        normalHeroModeEnabled: true,
+        manualSignupPhoneSmsEnabled: true,
+        contributionMode: false,
+        contributionModeExpected: false,
+        phoneVerificationEnabled: true,
+        signupMethod: 'phone',
+        resolvedSignupMethod: 'phone',
+        signupPhoneNumber: phoneNumber,
+        accountIdentifierType: 'phone',
+        accountIdentifier: phoneNumber,
+        signupPhoneActivation: null,
+        signupPhoneCompletedActivation: null,
+        currentPhoneVerificationCode: '',
+        signupPhoneVerificationRequestedAt: null,
+        signupPhoneVerificationPurpose: '',
+      };
+    }
+
     function buildXiaohongshuNodeStatuses(state = {}, startNodeId = 'plus-checkout-create') {
       const nodeIds = typeof getNodeIdsForState === 'function' ? getNodeIdsForState(state) : [];
       const startIndex = Array.isArray(nodeIds) ? nodeIds.indexOf(startNodeId) : -1;
@@ -1533,7 +1574,9 @@
             }
           }
           const state = await getState();
-          const autoRunStartValidation = validateAutoRunStart(state, { state });
+          const normalHeroUpdates = buildNormalHeroAutoRunStateUpdates(state, message.payload || {});
+          const validationState = normalHeroUpdates ? { ...state, ...normalHeroUpdates } : state;
+          const autoRunStartValidation = validateAutoRunStart(validationState, { state: validationState });
           if (autoRunStartValidation?.ok === false) {
             throw new Error(autoRunStartValidation.errors?.[0]?.message || '当前设置不支持启动自动流程。');
           }
@@ -1557,11 +1600,21 @@
           const mode = message.payload?.mode === 'continue' ? 'continue' : 'restart';
           await setState({
             ...buildXiaohongshuRuntimeReset(state),
+            ...(normalHeroUpdates || {
+              normalHeroModeEnabled: false,
+              manualSignupPhoneSmsEnabled: false,
+            }),
             autoRunSkipFailures,
             autoRunRetryNonFreeTrial,
             autoRunRetryPaypalCallback,
           });
-          startAutoRunLoop(totalRuns, { autoRunSkipFailures, autoRunRetryNonFreeTrial, autoRunRetryPaypalCallback, mode });
+          startAutoRunLoop(totalRuns, {
+            autoRunSkipFailures,
+            autoRunRetryNonFreeTrial,
+            autoRunRetryPaypalCallback,
+            mode,
+            normalHeroModeEnabled: Boolean(normalHeroUpdates),
+          });
           return { ok: true };
         }
 
@@ -1610,6 +1663,8 @@
             plusModeEnabled: true,
             plusPaymentMethod: 'paypal',
             plusCheckoutCloudConversionEnabled: true,
+            normalHeroModeEnabled: false,
+            manualSignupPhoneSmsEnabled: false,
             signupMethod: 'email',
             resolvedSignupMethod: 'email',
           };
@@ -1630,6 +1685,8 @@
             plusModeEnabled: true,
             plusPaymentMethod: 'paypal',
             plusCheckoutCloudConversionEnabled: true,
+            normalHeroModeEnabled: false,
+            manualSignupPhoneSmsEnabled: false,
             signupMethod: 'email',
             resolvedSignupMethod: 'email',
             sub2apiGroupName: 'xiaohongshu',
@@ -1700,7 +1757,9 @@
             }
           }
           const state = await getState();
-          const autoRunStartValidation = validateAutoRunStart(state, { state });
+          const normalHeroUpdates = buildNormalHeroAutoRunStateUpdates(state, message.payload || {});
+          const validationState = normalHeroUpdates ? { ...state, ...normalHeroUpdates } : state;
+          const autoRunStartValidation = validateAutoRunStart(validationState, { state: validationState });
           if (autoRunStartValidation?.ok === false) {
             throw new Error(autoRunStartValidation.errors?.[0]?.message || '当前设置不支持启动自动流程。');
           }
@@ -1727,6 +1786,10 @@
           clearStopRequest();
           await setState({
             ...buildXiaohongshuRuntimeReset(state),
+            ...(normalHeroUpdates || {
+              normalHeroModeEnabled: false,
+              manualSignupPhoneSmsEnabled: false,
+            }),
             autoRunSkipFailures,
             autoRunRetryNonFreeTrial,
             autoRunRetryPaypalCallback,
