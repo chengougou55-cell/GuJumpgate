@@ -63,6 +63,35 @@ test('PayPal approval step switches hosted login country before submitting crede
   assert.ok(switchIndex < submitIndex, 'country switch should run before login submission');
 });
 
+test('PayPal hosted login prefers create account over password login', () => {
+  const script = readProjectFile('content/paypal-flow.js');
+
+  assert.match(script, /function findHostedLoginCreateAccountButton\(\)/);
+  assert.match(script, /create\\s\+\(\?:a\\s\+\)\?\(\?:paypal\\s\+\)\?account/);
+  assert.match(script, /创建\(\?:一个\)\?\(\?:\\s\*PayPal\\s\*\)\?\(\?:帐户\|账户\)/);
+  assert.match(script, /const createAccountButton = findHostedLoginCreateAccountButton\(\);/);
+  assert.match(script, /clickedCreateAccount: true/);
+  assert.match(script, /hostedLoginCreateAccountReady: Boolean\(findHostedLoginCreateAccountButton\(\)\)/);
+
+  const hostedLoginStartIndex = script.indexOf('async function submitHostedPayLogin');
+  const hostedLoginEndIndex = script.indexOf('async function submitHostedAccountCreateEmail');
+  const hostedLoginBlock = script.slice(hostedLoginStartIndex, hostedLoginEndIndex);
+  const createButtonIndex = hostedLoginBlock.indexOf('const createAccountButton = findHostedLoginCreateAccountButton();');
+  const emailInputIndex = hostedLoginBlock.indexOf("const emailInput = document.getElementById('email') || findEmailInput();");
+  assert.ok(hostedLoginStartIndex > -1 && hostedLoginEndIndex > hostedLoginStartIndex, 'hosted login function should be present');
+  assert.ok(createButtonIndex > -1, 'hosted login should look for create account button');
+  assert.ok(emailInputIndex > -1, 'hosted login should still support email input fallback');
+  assert.ok(createButtonIndex < emailInputIndex, 'create account should be preferred before email/password login fallback');
+
+  const har = readHar('www.paypal.com0526.har');
+  const redirect = har.log.entries.find((entry) => (
+    /^https:\/\/www\.paypal\.com\/agreements\/approve\?/i.test(entry.request?.url || '')
+    && entry.response?.status === 302
+    && /\/checkoutweb\/signup\?/i.test(String(entry.response?.redirectURL || ''))
+  ));
+  assert.ok(redirect, 'HAR0526 should show create-account path redirects into checkoutweb signup');
+});
+
 test('PayPal HAR shows country.x=US drives the hosted country state', () => {
   const har = readHar();
   const entries = har.log.entries || [];

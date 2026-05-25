@@ -241,6 +241,13 @@ function findPasswordLoginButton() {
   return button && button !== findEmailNextButton() ? button : null;
 }
 
+function findHostedLoginCreateAccountButton() {
+  return findClickableByText([
+    /create\s+(?:a\s+)?(?:paypal\s+)?account/i,
+    /创建(?:一个)?(?:\s*PayPal\s*)?(?:帐户|账户)/i,
+  ]);
+}
+
 function findApproveButton() {
   return findClickableByText([
     /同意并继续|同意|继续|授权|确认并继续/i,
@@ -988,6 +995,21 @@ function normalizeHostedVerificationCode(value = '') {
 async function submitHostedPayLogin(payload = {}) {
   await waitForDocumentComplete();
   removeHostedCaptchaArtifacts();
+  const createAccountButton = findHostedLoginCreateAccountButton();
+  if (createAccountButton && isVisibleElement(createAccountButton) && isEnabledControl(createAccountButton)) {
+    const buttonText = getActionText(createAccountButton);
+    dispatchHostedGenericClick(createAccountButton);
+    await sleep(1000);
+    removeHostedCaptchaArtifacts();
+    return {
+      stage: PAYPAL_HOSTED_STAGE_LOGIN,
+      submitted: true,
+      clickedCreateAccount: true,
+      buttonText,
+      nextExpected: 'account_create_or_guest_checkout',
+    };
+  }
+
   const email = normalizeText(payload.email || buildHostedRandomEmail());
   if (!email) {
     throw new Error('PayPal hosted checkout 缺少邮箱。');
@@ -1506,6 +1528,7 @@ function inspectPayPalState() {
     loginPhase,
     hasEmailInput: Boolean(emailInput),
     hasPasswordInput: Boolean(passwordInput),
+    hostedLoginCreateAccountReady: Boolean(findHostedLoginCreateAccountButton()),
     hostedAccountCreateEmail: hostedStage === PAYPAL_HOSTED_STAGE_ACCOUNT_CREATE_EMAIL,
     hostedAccountCreateEmailContinueReady: Boolean(findHostedAccountCreateEmailContinueButton()),
     hasHostedGuestCheckout,
