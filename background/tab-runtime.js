@@ -274,7 +274,13 @@
       if (!Number.isInteger(tabId)) {
         return null;
       }
-      if (!(await isTabInAutomationWindow(tabId))) {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (!tab) {
+        registry = setSourceMapValue(registry, source, null);
+        await setState({ tabRegistry: registry });
+        return null;
+      }
+      if (!(await isTabInAutomationWindow(tab))) {
         registry = setSourceMapValue(registry, source, null);
         await setState({ tabRegistry: registry });
         return null;
