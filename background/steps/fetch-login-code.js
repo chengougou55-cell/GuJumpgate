@@ -3,6 +3,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundStep8Module() {
   const MAIL_2925_FILTER_LOOKBACK_MS = 10 * 60 * 1000;
   const MAIL_VERIFICATION_FILTER_LOOKBACK_MS = 15 * 1000;
+  const MANUAL_ADD_EMAIL_MAX_ATTEMPTS = 3;
 
   function createStep8Executor(deps = {}) {
     const {
@@ -32,6 +33,8 @@
       sendToContentScriptResilient,
       persistRegistrationEmailState = null,
       phoneVerificationHelpers = null,
+      requestManualAddEmailInput = null,
+      requestManualEmailCodeInput = null,
       setState,
       shouldUseCustomRegistrationEmail,
       sleepWithStop,
@@ -126,6 +129,79 @@
       return String(value || '').trim().toLowerCase();
     }
 
+    function normalizeManualAddEmail(value = '') {
+      const normalized = String(value || '').trim().toLowerCase();
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
+    }
+
+    function normalizeManualEmailCode(value = '') {
+      const normalized = String(value || '').trim().replace(/[^\d]/g, '');
+      return /^\d{4,8}$/.test(normalized) ? normalized : '';
+    }
+
+    function shouldPromptManualAddEmail(state = {}) {
+      return Boolean(state?.normalHeroModeEnabled || state?.manualSignupPhoneSmsEnabled);
+    }
+
+    function shouldPromptManualEmailCode(state = {}) {
+      return shouldPromptManualAddEmail(state) && Boolean(state?.manualAddEmailInputRequired);
+    }
+
+    async function requestManualAddEmailForFlow(state = {}, visibleStep = 0) {
+      if (typeof requestManualAddEmailInput !== 'function') {
+        throw new Error(`步骤 ${visibleStep || 0}：普通Hero添加邮箱输入弹窗不可用，请刷新侧边栏后重试。`);
+      }
+      const phoneNumber = String(
+        state?.signupPhoneNumber
+        || (String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone' ? state?.accountIdentifier : '')
+        || ''
+      ).trim();
+      await addLog(
+        `步骤 ${visibleStep || 0}：检测到 add-email 页面，等待人工输入要绑定的邮箱...`,
+        'info',
+        { step: visibleStep, stepKey: activeFetchLoginCodeStepKey || 'bind-email' }
+      );
+      const email = normalizeManualAddEmail(await requestManualAddEmailInput({
+        phoneNumber,
+        title: '普通Hero添加邮箱',
+        message: phoneNumber
+          ? `当前手机号账号 ${phoneNumber} 需要添加邮箱，请输入要绑定的邮箱。`
+          : '当前账号需要添加邮箱，请输入要绑定的邮箱。',
+      }));
+      if (!email) {
+        throw new Error(`步骤 ${visibleStep || 0}：添加邮箱输入已取消或格式无效。`);
+      }
+      return email;
+    }
+
+    async function requestManualEmailCodeForFlow(state = {}, visibleStep = 0, options = {}) {
+      if (typeof requestManualEmailCodeInput !== 'function') {
+        throw new Error(`步骤 ${visibleStep || 0}：普通Hero邮箱验证码输入弹窗不可用，请刷新侧边栏后重试。`);
+      }
+      const email = normalizeStep8VerificationTargetEmail(
+        options?.email
+        || state?.step8VerificationTargetEmail
+        || state?.email
+        || ''
+      );
+      await addLog(
+        `步骤 ${visibleStep || 0}：等待人工输入${email ? ` ${email}` : ''} 收到的邮箱验证码...`,
+        'info',
+        { step: visibleStep, stepKey: activeFetchLoginCodeStepKey || 'fetch-bind-email-code' }
+      );
+      const code = normalizeManualEmailCode(await requestManualEmailCodeInput({
+        email,
+        title: '普通Hero邮箱验证码',
+        message: email
+          ? `请输入 ${email} 收到的邮箱验证码。`
+          : '请输入邮箱收到的验证码。',
+      }));
+      if (!code) {
+        throw new Error(`步骤 ${visibleStep || 0}：邮箱验证码输入已取消或格式无效。`);
+      }
+      return code;
+    }
+
     function resolveBoundEmailLoginTarget(state = {}, visibleStep = 0) {
       const email = String(
         state?.step8VerificationTargetEmail
@@ -182,7 +258,7 @@
     }
 
     async function submitAddEmailIfNeeded(state, visibleStep, initialPageState = null) {
-      if (typeof resolveSignupEmailForFlow !== 'function' || typeof sendToContentScriptResilient !== 'function') {
+      if (typeof sendToContentScriptResilient !== 'function') {
         return { state, pageState: initialPageState };
       }
 
@@ -196,12 +272,7 @@
         return { state, pageState };
       }
 
-      const latestState = typeof getState === 'function' ? await getState() : state;
-      const resolvedEmail = await resolveSignupEmailForFlow(latestState, {
-        preserveAccountIdentity: true,
-      });
-      await addLog(`步骤 ${visibleStep}：检测到添加邮箱页，正在添加邮箱 ${resolvedEmail} 并进入邮箱验证码页...`);
-
+      let latestState = typeof getState === 'function' ? await getState() : state;
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
         ? await getOAuthFlowStepTimeoutMs(60000, {
           step: visibleStep,
@@ -209,25 +280,50 @@
           oauthUrl: latestState?.oauthUrl || state?.oauthUrl || '',
         })
         : 60000;
-      const result = await sendToContentScriptResilient(
-        'signup-page',
-        {
-          type: 'SUBMIT_ADD_EMAIL',
-          source: 'background',
-          payload: { email: resolvedEmail },
-        },
-        {
-          timeoutMs,
-          responseTimeoutMs: timeoutMs,
-          retryDelayMs: 700,
-          logMessage: `步骤 ${visibleStep}：添加邮箱页面正在切换，等待邮箱验证码页就绪...`,
-          logStep: visibleStep,
-          logStepKey: activeFetchLoginCodeStepKey || 'fetch-login-code',
-        }
-      );
+      const manualAddEmailMode = shouldPromptManualAddEmail(latestState);
+      if (!manualAddEmailMode && typeof resolveSignupEmailForFlow !== 'function') {
+        return { state, pageState };
+      }
+      let resolvedEmail = '';
+      let result = null;
+      const maxAttempts = manualAddEmailMode ? MANUAL_ADD_EMAIL_MAX_ATTEMPTS : 1;
 
-      if (result?.error) {
-        throw new Error(result.error);
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        resolvedEmail = manualAddEmailMode
+          ? await requestManualAddEmailForFlow(latestState, visibleStep)
+          : await resolveSignupEmailForFlow(latestState, {
+            preserveAccountIdentity: true,
+          });
+        await addLog(`步骤 ${visibleStep}：检测到添加邮箱页，正在添加邮箱 ${resolvedEmail} 并进入邮箱验证码页...`);
+        result = await sendToContentScriptResilient(
+          'signup-page',
+          {
+            type: 'SUBMIT_ADD_EMAIL',
+            source: 'background',
+            payload: { email: resolvedEmail },
+          },
+          {
+            timeoutMs,
+            responseTimeoutMs: timeoutMs,
+            retryDelayMs: 700,
+            logMessage: `步骤 ${visibleStep}：添加邮箱页面正在切换，等待邮箱验证码页就绪...`,
+            logStep: visibleStep,
+            logStepKey: activeFetchLoginCodeStepKey || 'fetch-login-code',
+          }
+        );
+
+        if (!result?.error) {
+          break;
+        }
+        if (!manualAddEmailMode || !/STEP8_EMAIL_IN_USE::|email_in_use/i.test(String(result.error || '')) || attempt >= maxAttempts) {
+          throw new Error(result.error);
+        }
+        await addLog(
+          `步骤 ${visibleStep}：邮箱 ${resolvedEmail} 已被占用，请重新输入其他邮箱（${attempt + 1}/${maxAttempts}）。`,
+          'warn',
+          { step: visibleStep, stepKey: activeFetchLoginCodeStepKey || 'bind-email' }
+        );
+        latestState = typeof getState === 'function' ? await getState() : latestState;
       }
 
       const displayedEmail = normalizeStep8VerificationTargetEmail(result?.displayedEmail || resolvedEmail);
@@ -255,6 +351,7 @@
           ...persistedState,
           email: resolvedEmail,
           step8VerificationTargetEmail: displayedEmail,
+          ...(manualAddEmailMode ? { manualAddEmailInputRequired: true } : {}),
         },
         pageState: {
           state: result?.directOAuthConsentPage ? 'oauth_consent_page' : 'verification_page',
@@ -545,6 +642,7 @@
           bindEmailSubmitted: true,
           email: preparedState?.email || '',
           step8VerificationTargetEmail: preparedState?.step8VerificationTargetEmail || nextPageState?.displayedEmail || '',
+          manualAddEmailInputRequired: Boolean(preparedState?.manualAddEmailInputRequired),
         });
       }
     }
@@ -676,6 +774,42 @@
       }
     }
 
+    async function submitManualEmailVerificationCode(state = {}, pageState = {}, visibleStep = 0) {
+      const email = normalizeStep8VerificationTargetEmail(
+        pageState?.displayedEmail
+        || state?.step8VerificationTargetEmail
+        || state?.email
+        || ''
+      );
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const code = await requestManualEmailCodeForFlow(state, visibleStep, { email });
+        await addLog(`步骤 ${visibleStep}：已获取人工输入的邮箱验证码，正在提交。`, 'info', {
+          step: visibleStep,
+          stepKey: activeFetchLoginCodeStepKey || 'fetch-bind-email-code',
+        });
+        const submitResult = await resolveVerificationStep(8, {
+          ...state,
+          step8VerificationTargetEmail: email,
+        }, { provider: 'manual', label: '人工邮箱' }, {
+          completionStep: visibleStep,
+          manualCode: code,
+        });
+        if (!submitResult?.invalidCode) {
+          return submitResult || {};
+        }
+        if (attempt >= maxAttempts) {
+          throw new Error(`步骤 ${visibleStep}：邮箱验证码连续 ${maxAttempts} 次被拒绝：${submitResult.errorText || code}`);
+        }
+        await addLog(
+          `步骤 ${visibleStep}：邮箱验证码被拒绝，请重新输入验证码（${attempt + 1}/${maxAttempts}）。`,
+          'warn',
+          { step: visibleStep, stepKey: activeFetchLoginCodeStepKey || 'fetch-bind-email-code' }
+        );
+      }
+      return {};
+    }
+
     async function executeFetchBindEmailCode(state) {
       const visibleStep = getVisibleStep(state, 10);
       activeFetchLoginCodeStep = visibleStep;
@@ -698,6 +832,10 @@
       }
       if (!state?.bindEmailSubmitted) {
         throw new Error(`步骤 ${visibleStep}：尚未完成绑定邮箱提交，不能直接获取绑定邮箱验证码。`);
+      }
+
+      if (shouldPromptManualEmailCode(state)) {
+        return submitManualEmailVerificationCode(state, pageState, visibleStep);
       }
 
       return pollEmailVerificationCode(state, pageState, visibleStep, {
@@ -749,6 +887,10 @@
       }
       if (pageState?.state !== 'verification_page') {
         throw new Error(`步骤 ${visibleStep}：绑定邮箱后获取登录验证码只处理邮箱登录验证码页，当前状态：${pageState?.state || 'unknown'}。URL: ${pageState?.url || ''}`.trim());
+      }
+
+      if (shouldPromptManualEmailCode(state)) {
+        return submitManualEmailVerificationCode(preparedState, pageState, visibleStep);
       }
 
       return pollEmailVerificationCode(preparedState, pageState, visibleStep, {

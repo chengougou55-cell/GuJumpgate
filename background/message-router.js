@@ -930,6 +930,9 @@
             lastEmailTimestamp: payload.emailTimestamp || null,
           }),
           loginVerificationRequestedAt: null,
+          ...(stepKey === 'fetch-bound-email-login-code' ? {
+            manualAddEmailInputRequired: false,
+          } : {}),
         });
         return;
       }
@@ -953,6 +956,9 @@
         }
         if (payload.step8VerificationTargetEmail !== undefined) {
           updates.step8VerificationTargetEmail = payload.step8VerificationTargetEmail || '';
+        }
+        if (payload.manualAddEmailInputRequired !== undefined) {
+          updates.manualAddEmailInputRequired = Boolean(payload.manualAddEmailInputRequired);
         }
         if (Object.keys(updates).length) {
           await setState(updates);
@@ -978,6 +984,7 @@
           await setState({ localhostUrl: payload.localhostUrl });
           broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
         }
+        await setState({ manualAddEmailInputRequired: false });
         return;
       }
 
@@ -1600,13 +1607,13 @@
           const mode = message.payload?.mode === 'continue' ? 'continue' : 'restart';
           await setState({
             ...buildXiaohongshuRuntimeReset(state),
+            autoRunSkipFailures,
+            autoRunRetryNonFreeTrial,
+            autoRunRetryPaypalCallback,
             ...(normalHeroUpdates || {
               normalHeroModeEnabled: false,
               manualSignupPhoneSmsEnabled: false,
             }),
-            autoRunSkipFailures,
-            autoRunRetryNonFreeTrial,
-            autoRunRetryPaypalCallback,
           });
           startAutoRunLoop(totalRuns, {
             autoRunSkipFailures,
@@ -1786,13 +1793,13 @@
           clearStopRequest();
           await setState({
             ...buildXiaohongshuRuntimeReset(state),
+            autoRunSkipFailures,
+            autoRunRetryNonFreeTrial,
+            autoRunRetryPaypalCallback,
             ...(normalHeroUpdates || {
               normalHeroModeEnabled: false,
               manualSignupPhoneSmsEnabled: false,
             }),
-            autoRunSkipFailures,
-            autoRunRetryNonFreeTrial,
-            autoRunRetryPaypalCallback,
           });
           return result;
         }

@@ -13803,6 +13803,42 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   throwIfStopped,
   VERIFICATION_POLL_MAX_ROUNDS,
 });
+const requestNormalHeroSmsCodeInput = (payload = {}) => chrome.runtime.sendMessage({
+  type: 'REQUEST_NORMAL_HERO_SMS_CODE_INPUT',
+  payload,
+}).then((response) => {
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+  return response?.code || '';
+}).catch((error) => {
+  throw new Error(`普通Hero短信验证码输入弹窗不可用，请保持侧边栏打开后重试。${error?.message || error || ''}`);
+});
+
+const requestNormalHeroAddEmailInput = (payload = {}) => chrome.runtime.sendMessage({
+  type: 'REQUEST_NORMAL_HERO_ADD_EMAIL_INPUT',
+  payload,
+}).then((response) => {
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+  return response?.email || '';
+}).catch((error) => {
+  throw new Error(`普通Hero添加邮箱输入弹窗不可用，请保持侧边栏打开后重试。${error?.message || error || ''}`);
+});
+
+const requestNormalHeroEmailCodeInput = (payload = {}) => chrome.runtime.sendMessage({
+  type: 'REQUEST_NORMAL_HERO_EMAIL_CODE_INPUT',
+  payload,
+}).then((response) => {
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+  return response?.code || '';
+}).catch((error) => {
+  throw new Error(`普通Hero邮箱验证码输入弹窗不可用，请保持侧边栏打开后重试。${error?.message || error || ''}`);
+});
+
 const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.createPhoneVerificationHelpers({
   addLog,
   broadcastDataUpdate,
@@ -13848,17 +13884,7 @@ const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.crea
   getOAuthFlowRemainingMs,
   getOAuthFlowStepTimeoutMs,
   getState,
-  requestManualPhoneSmsCodeInput: (payload = {}) => chrome.runtime.sendMessage({
-    type: 'REQUEST_NORMAL_HERO_SMS_CODE_INPUT',
-    payload,
-  }).then((response) => {
-    if (response?.error) {
-      throw new Error(response.error);
-    }
-    return response?.code || '';
-  }).catch((error) => {
-    throw new Error(`普通Hero短信验证码输入弹窗不可用，请保持侧边栏打开后重试。${error?.message || error || ''}`);
-  }),
+  requestManualPhoneSmsCodeInput: requestNormalHeroSmsCodeInput,
   HERO_SMS_COUNTRY_ID,
   HERO_SMS_COUNTRY_LABEL,
   HERO_SMS_SERVICE_CODE,
@@ -14013,6 +14039,8 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   resolveSignupEmailForFlow,
   persistRegistrationEmailState,
   phoneVerificationHelpers,
+  requestManualAddEmailInput: requestNormalHeroAddEmailInput,
+  requestManualEmailCodeInput: requestNormalHeroEmailCodeInput,
   rerunStep7ForStep8Recovery: (...args) => rerunStep7ForStep8Recovery(...args),
   resolveSignupMethod,
   reuseOrCreateTab,

@@ -14162,6 +14162,11 @@ function normalizeManualSmsCodeInput(value = '') {
   return /^\d{4,8}$/.test(normalized) ? normalized : '';
 }
 
+function normalizeManualEmailInput(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
+}
+
 async function openNormalHeroPhoneDialog() {
   if (!sharedFormDialog?.open) {
     const fallback = window.prompt?.('请输入手机号，例如 +57 (324) 132 10 49') || '';
@@ -14212,6 +14217,60 @@ async function openNormalHeroSmsCodeDialog(options = {}) {
     confirmLabel: '提交验证码',
   });
   return result ? normalizeManualSmsCodeInput(result.code) : '';
+}
+
+async function openNormalHeroEmailCodeDialog(options = {}) {
+  if (!sharedFormDialog?.open) {
+    const fallback = window.prompt?.('请输入邮箱收到的验证码') || '';
+    return normalizeManualSmsCodeInput(fallback);
+  }
+  const email = String(options.email || latestState?.step8VerificationTargetEmail || latestState?.email || '').trim();
+  const result = await sharedFormDialog.open({
+    title: String(options.title || '').trim() || '普通Hero邮箱验证码',
+    message: String(options.message || '').trim()
+      || (email ? `请输入 ${email} 收到的邮箱验证码。` : '请输入邮箱收到的验证码。'),
+    fields: [{
+      key: 'code',
+      label: '邮箱验证码',
+      type: 'text',
+      placeholder: '请输入验证码',
+      inputMode: 'numeric',
+      autocomplete: 'one-time-code',
+      required: true,
+      requiredMessage: '请输入邮箱验证码。',
+      normalize: (value) => String(value || '').trim().replace(/[^\d]/g, ''),
+      validate: (value) => normalizeManualSmsCodeInput(value) ? '' : '验证码应为 4-8 位数字。',
+    }],
+    confirmLabel: '提交验证码',
+  });
+  return result ? normalizeManualSmsCodeInput(result.code) : '';
+}
+
+async function openNormalHeroAddEmailDialog(options = {}) {
+  if (!sharedFormDialog?.open) {
+    const fallback = window.prompt?.('请输入要添加的邮箱') || '';
+    return normalizeManualEmailInput(fallback);
+  }
+  const phoneNumber = String(options.phoneNumber || latestState?.signupPhoneNumber || '').trim();
+  const result = await sharedFormDialog.open({
+    title: String(options.title || '').trim() || '普通Hero添加邮箱',
+    message: String(options.message || '').trim()
+      || (phoneNumber ? `请输入要绑定到 ${phoneNumber} 的邮箱。` : '请输入要添加到当前账号的邮箱。'),
+    fields: [{
+      key: 'email',
+      label: '邮箱',
+      type: 'email',
+      placeholder: 'name@example.com',
+      inputMode: 'email',
+      autocomplete: 'email',
+      required: true,
+      requiredMessage: '请输入邮箱。',
+      normalize: (value) => String(value || '').trim().toLowerCase(),
+      validate: (value) => normalizeManualEmailInput(value) ? '' : '请输入有效邮箱地址。',
+    }],
+    confirmLabel: '提交邮箱',
+  });
+  return result ? normalizeManualEmailInput(result.email) : '';
 }
 
 async function openXiaohongshuAccessTokenDialog() {
@@ -16843,6 +16902,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       (async () => {
         const code = await openNormalHeroSmsCodeDialog(message.payload || {});
         sendResponse(code ? { ok: true, code } : { error: '已取消普通Hero短信验证码输入' });
+      })().catch((err) => {
+        sendResponse({ error: err.message });
+      });
+      return true;
+    }
+
+    case 'REQUEST_NORMAL_HERO_ADD_EMAIL_INPUT': {
+      (async () => {
+        const email = await openNormalHeroAddEmailDialog(message.payload || {});
+        sendResponse(email ? { ok: true, email } : { error: '已取消普通Hero添加邮箱输入' });
+      })().catch((err) => {
+        sendResponse({ error: err.message });
+      });
+      return true;
+    }
+
+    case 'REQUEST_NORMAL_HERO_EMAIL_CODE_INPUT': {
+      (async () => {
+        const code = await openNormalHeroEmailCodeDialog(message.payload || {});
+        sendResponse(code ? { ok: true, code } : { error: '已取消普通Hero邮箱验证码输入' });
       })().catch((err) => {
         sendResponse({ error: err.message });
       });

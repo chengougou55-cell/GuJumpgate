@@ -1284,6 +1284,36 @@
         rejectedCodes.add(state[stateKey]);
       }
 
+      const manualCode = String(options.manualCode || '').trim();
+      if (manualCode) {
+        const submitResult = await submitVerificationCode(step, manualCode, options);
+        if (submitResult.invalidCode) {
+          return {
+            invalidCode: true,
+            errorText: submitResult.errorText || '',
+            url: submitResult.url || '',
+          };
+        }
+        await setState({
+          lastEmailTimestamp: null,
+          [stateKey]: manualCode,
+        });
+        const completionNodeId = await getNodeIdForStep(completionStep);
+        if (!completionNodeId) {
+          throw new Error(`步骤 ${completionStep} 未映射到验证码节点。`);
+        }
+        await completeNodeFromBackground(completionNodeId, {
+          emailTimestamp: null,
+          code: manualCode,
+          phoneVerificationRequired: Boolean(submitResult.addPhonePage),
+        });
+        return {
+          phoneVerificationRequired: Boolean(submitResult.addPhonePage),
+          code: manualCode,
+          url: submitResult.url || '',
+        };
+      }
+
       let nextFilterAfterTimestamp = options.filterAfterTimestamp ?? null;
       const requestFreshCodeFirst = options.requestFreshCodeFirst !== undefined
         ? Boolean(options.requestFreshCodeFirst)
