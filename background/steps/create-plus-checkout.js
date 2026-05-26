@@ -252,7 +252,8 @@
     }
 
     function normalizeCloudCheckoutPaymentMethod(value = '', fallback = PLUS_PAYMENT_METHOD_PAYPAL) {
-      const normalized = normalizePlusPaymentMethod(value || fallback);
+      const rawValue = String(value ?? '').trim().toLowerCase();
+      const normalized = normalizePlusPaymentMethod(rawValue || fallback);
       return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
     }
 
@@ -279,6 +280,17 @@
         country: normalizeCloudCheckoutCountry(state?.plusCheckoutCloudConversionCountry, fallbackBillingDetails.country),
         currency: normalizeCloudCheckoutCurrency(state?.plusCheckoutCloudConversionCurrency, fallbackBillingDetails.currency),
       };
+    }
+
+    function assertCloudCheckoutPaymentMethodMatchesFlow(paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL, requestPaymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
+      const flowPaymentMethod = normalizeCloudCheckoutPaymentMethod('', paymentMethod);
+      const cloudPaymentMethod = normalizeCloudCheckoutPaymentMethod(requestPaymentMethod, flowPaymentMethod);
+      if (flowPaymentMethod === cloudPaymentMethod) {
+        return;
+      }
+      throw new Error(
+        `步骤 6：云端支付转换 paymentMethod=${cloudPaymentMethod} 与当前 Plus 支付=${flowPaymentMethod} 不一致，请把云端参数改为“跟随Plus支付”或切换 Plus 支付方式。`
+      );
     }
 
     function maskCloudCheckoutSecret(value = '', visibleStart = 6, visibleEnd = 4) {
@@ -308,29 +320,80 @@
       };
     }
 
-    function redactCloudCheckoutPayloadForLog(value, depth = 0) {
+    function escapeRegExp(value = '') {
+      return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function safeDecodeURIComponent(value = '') {
+      try {
+        return decodeURIComponent(String(value || ''));
+      } catch {
+        return String(value || '');
+      }
+    }
+
+    function redactCloudCheckoutTextForLog(text = '', secrets = []) {
+      let result = String(text || '');
+      for (const secret of secrets) {
+        const rawSecret = String(secret || '');
+        if (rawSecret.length < 6) {
+          continue;
+        }
+        result = result.replace(new RegExp(escapeRegExp(rawSecret), 'g'), maskCloudCheckoutSecret(rawSecret));
+      }
+      result = result
+        .replace(/(sk-[A-Za-z0-9_-]{8,})/g, (match) => maskCloudCheckoutSecret(match))
+        .replace(/(sess-[A-Za-z0-9_-]{8,})/g, (match) => maskCloudCheckoutSecret(match))
+        .replace(/(Bearer\s+)([A-Za-z0-9._~+/=-]{12,})/gi, (_match, prefix, token) => `${prefix}${maskCloudCheckoutSecret(token)}`)
+        .replace(
+          /([?&][^=&#\s]*(?:key|token|secret|password|auth)[^=&#\s]*=)([^&#\s]+)/gi,
+          (_match, prefix, value) => `${prefix}${maskCloudCheckoutSecret(safeDecodeURIComponent(value))}`
+        );
+      return result;
+    }
+
+    function redactCloudCheckoutUrlForLog(url = '', secrets = []) {
+      const rawUrl = String(url || '');
+      try {
+        const parsed = new URL(rawUrl);
+        parsed.searchParams.forEach((value, key) => {
+          if (/(?:key|token|secret|password|auth)/i.test(String(key || ''))) {
+            parsed.searchParams.set(key, maskCloudCheckoutSecret(value));
+          }
+        });
+        return redactCloudCheckoutTextForLog(parsed.toString(), secrets);
+      } catch {
+        return redactCloudCheckoutTextForLog(rawUrl, secrets);
+      }
+    }
+
+    function redactCloudCheckoutPayloadForLog(value, depth = 0, secrets = []) {
+      if (typeof value === 'string') {
+        return redactCloudCheckoutTextForLog(value, secrets);
+      }
       if (!value || typeof value !== 'object' || depth > 5) {
         return value;
       }
       if (Array.isArray(value)) {
-        return value.map((item) => redactCloudCheckoutPayloadForLog(item, depth + 1));
+        return value.map((item) => redactCloudCheckoutPayloadForLog(item, depth + 1, secrets));
       }
       return Object.entries(value).reduce((acc, [key, item]) => {
         const normalizedKey = String(key || '').toLowerCase();
         acc[key] = /^(access_?token|api_?key|authorization|secret|password)$/i.test(normalizedKey)
           ? maskCloudCheckoutSecret(item)
-          : redactCloudCheckoutPayloadForLog(item, depth + 1);
+          : redactCloudCheckoutPayloadForLog(item, depth + 1, secrets);
         return acc;
       }, {});
     }
 
-    function stringifyCloudCheckoutLogPayload(payload, maxLength = 3000) {
+    function stringifyCloudCheckoutLogPayload(payload, maxLength = 3000, secrets = []) {
       let text = '';
       try {
         text = JSON.stringify(payload);
       } catch {
         text = String(payload || '');
       }
+      text = redactCloudCheckoutTextForLog(text, secrets);
       return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
     }
 
@@ -2693,6 +2756,7 @@ function FindProxyForURL(url, host) {
       }
 
       const cloudRequestDetails = getCloudCheckoutRequestDetails(paymentMethod, state);
+      assertCloudCheckoutPaymentMethodMatchesFlow(paymentMethod, cloudRequestDetails.paymentMethod);
       const headers = {
         Accept: 'application/json',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -2708,13 +2772,14 @@ function FindProxyForURL(url, host) {
         country: cloudRequestDetails.country,
         currency: cloudRequestDetails.currency,
       };
+      const logSecrets = [token, apiKey].filter(Boolean);
 
       await addLog(`步骤 6：云端支付转换请求报文：${stringifyCloudCheckoutLogPayload({
-        url: apiUrl,
+        url: redactCloudCheckoutUrlForLog(apiUrl, logSecrets),
         method: 'POST',
         headers: redactCloudCheckoutHeadersForLog(headers),
         body: redactCloudCheckoutBodyForLog(requestBody),
-      })}`, 'info');
+      }, 3000, logSecrets)}`, 'info');
 
       let response = null;
       let data = null;
@@ -2728,15 +2793,15 @@ function FindProxyForURL(url, host) {
         await addLog(`步骤 6：云端支付转换响应报文：${stringifyCloudCheckoutLogPayload({
           ok: false,
           error: error?.message || String(error || '未知错误'),
-        })}`, 'warn');
+        }, 3000, logSecrets)}`, 'warn');
         throw error;
       }
       await addLog(`步骤 6：云端支付转换响应报文：${stringifyCloudCheckoutLogPayload({
         status: response?.status || 0,
         statusText: response?.statusText || '',
         ok: Boolean(response?.ok),
-        body: redactCloudCheckoutPayloadForLog(data),
-      })}`, response?.ok ? 'info' : 'warn');
+        body: redactCloudCheckoutPayloadForLog(data, 0, logSecrets),
+      }, 3000, logSecrets)}`, response?.ok ? 'info' : 'warn');
 
       const targetCheckoutUrl = String(
         data?.preferredCheckoutUrl
@@ -2751,6 +2816,7 @@ function FindProxyForURL(url, host) {
           data?.detail || data?.message || data?.error || data,
           `HTTP ${response?.status || 0}`
         );
+        const safeDetail = redactCloudCheckoutTextForLog(detail, logSecrets);
         if (isCloudCheckoutAlreadyPaidMessage(detail)) {
           return {
             checkoutUrl: '',
@@ -2762,12 +2828,13 @@ function FindProxyForURL(url, host) {
             preferredCheckoutUrl: '',
             country: String(data?.country || cloudRequestDetails.country).trim() || cloudRequestDetails.country,
             currency: String(data?.currency || cloudRequestDetails.currency).trim() || cloudRequestDetails.currency,
+            paymentMethod: cloudRequestDetails.paymentMethod,
             checkoutSource: CLOUD_CHECKOUT_ALREADY_PAID_SOURCE,
             alreadyPaid: true,
-            alreadyPaidDetail: detail,
+            alreadyPaidDetail: safeDetail,
           };
         }
-        throw new Error(`步骤 6：云端支付转换失败：${detail}`);
+        throw new Error(`步骤 6：云端支付转换失败：${safeDetail}`);
       }
 
       return {
@@ -2780,6 +2847,7 @@ function FindProxyForURL(url, host) {
         preferredCheckoutUrl: targetCheckoutUrl,
         country: String(data?.country || cloudRequestDetails.country).trim() || cloudRequestDetails.country,
         currency: String(data?.currency || cloudRequestDetails.currency).trim() || cloudRequestDetails.currency,
+        paymentMethod: cloudRequestDetails.paymentMethod,
         checkoutSource: 'cloud-converted-checkout',
       };
     }
@@ -2920,7 +2988,7 @@ function FindProxyForURL(url, host) {
       try {
         checkoutScopedProxySnapshot = await maybeApplyCheckoutConversionProxy(state, paymentMethod);
 
-        const paymentMethodLabel = getPlusPaymentMethodLabel(paymentMethod);
+        let effectivePaymentMethod = paymentMethod;
         const checkoutModeLabel = getCheckoutModeLabel(state);
         await addLog(
           directAccessToken
@@ -2960,6 +3028,7 @@ function FindProxyForURL(url, host) {
           }
           result = await generateCloudCheckoutFromApi(accessToken, paymentMethod, state);
           result.sessionEmail = result.sessionEmail || sessionEmail;
+          effectivePaymentMethod = normalizeCloudCheckoutPaymentMethod(result.paymentMethod, paymentMethod);
         } else {
           await addLog(
             paymentMethod === PLUS_PAYMENT_METHOD_PAYPAL
@@ -2977,6 +3046,7 @@ function FindProxyForURL(url, host) {
             throw new Error(result.error);
           }
           result.sessionEmail = readEmailFromSessionResult(result);
+          effectivePaymentMethod = paymentMethod;
         }
         if (result?.alreadyPaid) {
           await completeCloudCheckoutAlreadyPaid(tabId, result, state);
@@ -3032,9 +3102,9 @@ function FindProxyForURL(url, host) {
             : '',
         });
 
-        await addLog(`步骤 6：Plus Checkout 页面已就绪（${paymentMethodLabel} / ${result.country || 'DE'} ${result.currency || 'EUR'}），准备继续下一步。`, 'info');
+        await addLog(`步骤 6：Plus Checkout 页面已就绪（${getPlusPaymentMethodLabel(effectivePaymentMethod)} / ${result.country || 'DE'} ${result.currency || 'EUR'}），准备继续下一步。`, 'info');
 
-        if (shouldWaitForHostedCheckoutSuccess(state, paymentMethod)) {
+        if (shouldWaitForHostedCheckoutSuccess(state, effectivePaymentMethod)) {
           await addLog('步骤 6：当前 hosted checkout 流程将等待支付成功页出现后，再继续 OAuth 流程。', 'info');
           startHostedCheckoutAutomation(tabId, {
             plusCheckoutCountry: result.country || 'DE',

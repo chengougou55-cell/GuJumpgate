@@ -1090,7 +1090,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   plusCheckoutCloudConversionEnabled: true,
   plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
   plusCheckoutCloudConversionApiKey: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY,
-  plusCheckoutCloudConversionPaymentMethod: PLUS_PAYMENT_METHOD_PAYPAL,
+  plusCheckoutCloudConversionPaymentMethod: '',
   plusCheckoutCloudConversionCountry: 'US',
   plusCheckoutCloudConversionCurrency: 'USD',
   plusCheckoutConversionProxyUrl: '',
@@ -1980,6 +1980,9 @@ function normalizePlusPaymentMethod(value = '') {
 
 function normalizeCloudCheckoutPaymentMethod(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized || normalized === 'auto' || normalized === 'default') {
+    return '';
+  }
   return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
 }
 

@@ -3199,6 +3199,9 @@ function normalizePlusCheckoutCloudConversionApiKeyValue(value = '') {
 
 function normalizePlusCheckoutCloudConversionPaymentMethodValue(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized || normalized === 'auto' || normalized === 'default') {
+    return '';
+  }
   return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
 }
 
@@ -3212,6 +3215,14 @@ function normalizePlusCheckoutCloudConversionCurrencyValue(value = '', fallback 
   const fallbackValue = String(fallback || 'USD').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'USD';
   const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
   return normalized.length === 3 ? normalized : fallbackValue;
+}
+
+function getSelectedPlusCheckoutCloudConversionPaymentMethodValue() {
+  return normalizePlusCheckoutCloudConversionPaymentMethodValue(
+    typeof selectPlusCheckoutCloudConversionPaymentMethod !== 'undefined' && selectPlusCheckoutCloudConversionPaymentMethod
+      ? selectPlusCheckoutCloudConversionPaymentMethod.value
+      : latestState?.plusCheckoutCloudConversionPaymentMethod
+  );
 }
 
 function normalizeHostedCheckoutVerificationUrlValue(value = '') {
@@ -4659,7 +4670,7 @@ function collectSettingsPayload() {
     plusCheckoutCloudConversionApiKey: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY,
     plusCheckoutCloudConversionPaymentMethod: typeof selectPlusCheckoutCloudConversionPaymentMethod !== 'undefined' && selectPlusCheckoutCloudConversionPaymentMethod
       ? normalizePlusCheckoutCloudConversionPaymentMethodValue(selectPlusCheckoutCloudConversionPaymentMethod.value)
-      : PLUS_PAYMENT_METHOD_PAYPAL,
+      : '',
     plusCheckoutCloudConversionCountry: typeof inputPlusCheckoutCloudConversionCountry !== 'undefined' && inputPlusCheckoutCloudConversionCountry
       ? normalizePlusCheckoutCloudConversionCountryValue(inputPlusCheckoutCloudConversionCountry.value)
       : 'US',
@@ -10452,7 +10463,7 @@ function applySettingsState(state) {
   }
   if (typeof selectPlusCheckoutCloudConversionPaymentMethod !== 'undefined' && selectPlusCheckoutCloudConversionPaymentMethod) {
     selectPlusCheckoutCloudConversionPaymentMethod.value = normalizePlusCheckoutCloudConversionPaymentMethodValue(
-      state?.plusCheckoutCloudConversionPaymentMethod || PLUS_PAYMENT_METHOD_PAYPAL
+      state?.plusCheckoutCloudConversionPaymentMethod || ''
     );
   }
   if (typeof inputPlusCheckoutCloudConversionCountry !== 'undefined' && inputPlusCheckoutCloudConversionCountry) {
@@ -14796,6 +14807,7 @@ selectPlusPaymentMethod?.addEventListener('change', () => {
     plusAccountAccessStrategy: stepDefinitionState.plusAccountAccessStrategy,
   });
   validateHostedCheckoutContactConfig();
+  validatePlusCheckoutCloudConversionConfig();
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
 });
@@ -16223,6 +16235,26 @@ function validatePlusCheckoutCloudConversionConfig(options = {}) {
     return { valid: true, message: '' };
   }
 
+  const configuredPaymentMethod = getSelectedPlusCheckoutCloudConversionPaymentMethodValue();
+  if (configuredPaymentMethod && configuredPaymentMethod !== method) {
+    const message = `云端支付转换 paymentMethod=${configuredPaymentMethod} 与当前 Plus 支付=${method} 不一致，请改为“跟随Plus支付”或切换 Plus 支付方式。`;
+    if (selectPlusCheckoutCloudConversionPaymentMethod) {
+      selectPlusCheckoutCloudConversionPaymentMethod.classList.toggle('is-invalid', true);
+      selectPlusCheckoutCloudConversionPaymentMethod.title = message;
+      if (options.focusOnError) {
+        selectPlusCheckoutCloudConversionPaymentMethod.focus?.();
+      }
+    }
+    return {
+      valid: false,
+      message,
+    };
+  }
+  if (selectPlusCheckoutCloudConversionPaymentMethod) {
+    selectPlusCheckoutCloudConversionPaymentMethod.classList.toggle('is-invalid', false);
+    selectPlusCheckoutCloudConversionPaymentMethod.title = '云端支付转换请求体 paymentMethod';
+  }
+
   const normalizedApiUrl = normalizePlusCheckoutCloudConversionApiUrlValue(
     BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL
       || (typeof inputPlusCheckoutCloudConversionApiUrl !== 'undefined' && inputPlusCheckoutCloudConversionApiUrl
@@ -16481,6 +16513,7 @@ selectPlusCheckoutCloudConversionPaymentMethod?.addEventListener('change', () =>
   selectPlusCheckoutCloudConversionPaymentMethod.value = normalizePlusCheckoutCloudConversionPaymentMethodValue(
     selectPlusCheckoutCloudConversionPaymentMethod.value
   );
+  validatePlusCheckoutCloudConversionConfig();
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
 });
