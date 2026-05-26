@@ -349,6 +349,71 @@ test('hosted checkout uses Hero email from state for PayPal guest profile', asyn
   assert.equal(patches.length, 0);
 });
 
+test('hosted checkout ignores stale Hero email outside Normal Hero mode', async () => {
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+    getState: async () => ({
+      normalHeroModeEnabled: false,
+      manualSignupPhoneSmsEnabled: false,
+      email: 'HeroUser@Example.COM',
+      registrationEmailState: {
+        current: 'HeroUser@Example.COM',
+        previous: 'HeroUser@Example.COM',
+        source: 'normal_hero_start',
+        updatedAt: 1,
+      },
+      hostedCheckoutPhoneNumber: '5551112222',
+    }),
+    chrome: {
+      storage: {
+        local: {
+          get: async () => ({}),
+        },
+      },
+    },
+  });
+
+  const config = await executor.__test.getHostedCheckoutRuntimeConfig({ ensureEmail: true });
+  const profile = executor.__test.buildHostedCheckoutGuestProfile({}, config);
+
+  assert.equal(config.email, '');
+  assert.notEqual(profile.email, 'herouser@example.com');
+  assert.match(profile.email, /^[a-z0-9]{16}@gmail\.com$/);
+});
+
+test('xiaohongshu hosted checkout does not reuse stale registration email', async () => {
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+    getState: async () => ({
+      xiaohongshuModeEnabled: true,
+      normalHeroModeEnabled: false,
+      manualSignupPhoneSmsEnabled: false,
+      email: 'stale-register@example.com',
+      registrationEmailState: {
+        current: 'stale-register@example.com',
+        previous: 'stale-register@example.com',
+        source: 'flow',
+        updatedAt: 1,
+      },
+      hostedCheckoutPhoneNumber: '5551112222',
+    }),
+    chrome: {
+      storage: {
+        local: {
+          get: async () => ({}),
+        },
+      },
+    },
+  });
+
+  const config = await executor.__test.getHostedCheckoutRuntimeConfig({ ensureEmail: true });
+  const profile = executor.__test.buildHostedCheckoutGuestProfile({}, config);
+
+  assert.equal(config.email, '');
+  assert.notEqual(profile.email, 'stale-register@example.com');
+  assert.match(profile.email, /^[a-z0-9]{16}@gmail\.com$/);
+});
+
 test('hosted checkout prompts for Hero email when payment page lacks email', async () => {
   const patches = [];
   const requests = [];

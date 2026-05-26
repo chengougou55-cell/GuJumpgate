@@ -417,6 +417,48 @@
       };
     }
 
+    function isNormalHeroRegistrationEmailState(state = {}) {
+      const source = String(state?.registrationEmailState?.source || '').trim().toLowerCase();
+      return Boolean(
+        state?.manualAddEmailInputRequired
+        || source === 'normal_hero_start'
+        || source === 'normal_hero_checkout'
+      );
+    }
+
+    function buildNormalHeroRuntimeExitUpdates(state = {}) {
+      if (!Boolean(state?.normalHeroModeEnabled || state?.manualSignupPhoneSmsEnabled || isNormalHeroRegistrationEmailState(state))) {
+        return {};
+      }
+      const updates = {
+        normalHeroModeEnabled: false,
+        manualSignupPhoneSmsEnabled: false,
+        manualAddEmailInputRequired: false,
+        step8VerificationTargetEmail: '',
+        bindEmailSubmitted: false,
+      };
+      if (isNormalHeroRegistrationEmailState(state)) {
+        updates.email = null;
+        updates.registrationEmailState = {
+          current: '',
+          previous: '',
+          source: '',
+          updatedAt: 0,
+        };
+        if (String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone') {
+          updates.accountIdentifierType = null;
+          updates.accountIdentifier = '';
+        }
+        updates.signupPhoneNumber = '';
+        updates.signupPhoneActivation = null;
+        updates.signupPhoneCompletedActivation = null;
+        updates.currentPhoneVerificationCode = '';
+        updates.signupPhoneVerificationRequestedAt = null;
+        updates.signupPhoneVerificationPurpose = '';
+      }
+      return updates;
+    }
+
     function buildXiaohongshuNodeStatuses(state = {}, startNodeId = 'plus-checkout-create') {
       const nodeIds = typeof getNodeIdsForState === 'function' ? getNodeIdsForState(state) : [];
       const startIndex = Array.isArray(nodeIds) ? nodeIds.indexOf(startNodeId) : -1;
@@ -1633,10 +1675,7 @@
             autoRunSkipFailures,
             autoRunRetryNonFreeTrial,
             autoRunRetryPaypalCallback,
-            ...(normalHeroUpdates || {
-              normalHeroModeEnabled: false,
-              manualSignupPhoneSmsEnabled: false,
-            }),
+            ...(normalHeroUpdates || buildNormalHeroRuntimeExitUpdates(state)),
           });
           startAutoRunLoop(totalRuns, {
             autoRunSkipFailures,
@@ -1693,6 +1732,7 @@
             plusModeEnabled: true,
             plusPaymentMethod: 'paypal',
             plusCheckoutCloudConversionEnabled: true,
+            ...buildNormalHeroRuntimeExitUpdates(currentState),
             normalHeroModeEnabled: false,
             manualSignupPhoneSmsEnabled: false,
             signupMethod: 'email',
@@ -1715,6 +1755,7 @@
             plusModeEnabled: true,
             plusPaymentMethod: 'paypal',
             plusCheckoutCloudConversionEnabled: true,
+            ...buildNormalHeroRuntimeExitUpdates(currentState),
             normalHeroModeEnabled: false,
             manualSignupPhoneSmsEnabled: false,
             signupMethod: 'email',
@@ -1819,10 +1860,7 @@
             autoRunSkipFailures,
             autoRunRetryNonFreeTrial,
             autoRunRetryPaypalCallback,
-            ...(normalHeroUpdates || {
-              normalHeroModeEnabled: false,
-              manualSignupPhoneSmsEnabled: false,
-            }),
+            ...(normalHeroUpdates || buildNormalHeroRuntimeExitUpdates(state)),
           });
           return result;
         }

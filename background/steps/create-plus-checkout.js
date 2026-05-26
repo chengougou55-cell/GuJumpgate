@@ -141,7 +141,14 @@
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
     }
 
+    function shouldBridgeNormalHeroCheckoutEmail(state = {}) {
+      return Boolean(state?.normalHeroModeEnabled || state?.manualSignupPhoneSmsEnabled);
+    }
+
     function getStateCheckoutEmail(state = {}) {
+      if (!shouldBridgeNormalHeroCheckoutEmail(state)) {
+        return '';
+      }
       return normalizeCheckoutEmail(
         state?.email
         || state?.registrationEmailState?.current
@@ -1135,7 +1142,7 @@ function FindProxyForURL(url, host) {
       if (existingEmail) {
         return existingEmail;
       }
-      if (!state?.normalHeroModeEnabled && !state?.manualSignupPhoneSmsEnabled) {
+      if (!shouldBridgeNormalHeroCheckoutEmail(state)) {
         return '';
       }
       if (typeof requestManualAddEmailInput !== 'function') {

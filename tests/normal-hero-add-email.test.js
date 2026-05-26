@@ -34,6 +34,20 @@ function loadMessageRouterModule() {
   return sandbox.self.MultiPageBackgroundMessageRouter;
 }
 
+function loadSignupFlowHelpersModule() {
+  const sandbox = {
+    self: {},
+    console,
+    setTimeout,
+    clearTimeout,
+  };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(repoRoot, 'background/signup-flow-helpers.js'), 'utf8'),
+    sandbox
+  );
+  return sandbox.self.MultiPageSignupFlowHelpers;
+}
+
 function createBaseDeps(calls = []) {
   return {
     addLog: async (message, level) => calls.push(['log', level || 'info', message]),
@@ -96,6 +110,177 @@ test('Normal Hero auto-run payload stores startup email while preserving phone i
   assert.equal(started.totalRuns, 1);
   assert.equal(started.options.normalHeroModeEnabled, true);
   assert.ok(patches.some((patch) => patch.email === 'herouser@example.com'));
+});
+
+test('ordinary auto-run clears stale Normal Hero startup email before start', async () => {
+  let state = {
+    normalHeroModeEnabled: true,
+    manualSignupPhoneSmsEnabled: true,
+    manualAddEmailInputRequired: true,
+    signupMethod: 'phone',
+    resolvedSignupMethod: 'phone',
+    signupPhoneNumber: '+57 (324) 132 10 49',
+    accountIdentifierType: 'phone',
+    accountIdentifier: '+57 (324) 132 10 49',
+    email: 'HeroUser@Example.COM',
+    registrationEmailState: {
+      current: 'HeroUser@Example.COM',
+      previous: 'HeroUser@Example.COM',
+      source: 'normal_hero_start',
+      updatedAt: 1,
+    },
+  };
+  let started = null;
+  const router = loadMessageRouterModule().createMessageRouter({
+    addLog: async () => {},
+    buildXiaohongshuRuntimeReset: () => ({}),
+    clearStopRequest: () => {},
+    getPendingAutoRunTimerPlan: () => null,
+    getState: async () => state,
+    isAutoRunLockedState: () => false,
+    normalizeRunCount: (value) => Math.max(1, Math.floor(Number(value) || 1)),
+    setState: async (patch) => {
+      state = { ...state, ...patch };
+    },
+    startAutoRunLoop: (totalRuns, options) => {
+      started = { totalRuns, options };
+    },
+    validateAutoRunStart: () => ({ ok: true, errors: [] }),
+  });
+
+  const response = await router.handleMessage({
+    type: 'AUTO_RUN',
+    source: 'sidepanel',
+    payload: {
+      totalRuns: 1,
+      mode: 'restart',
+    },
+  }, {});
+
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), { ok: true });
+  assert.equal(state.normalHeroModeEnabled, false);
+  assert.equal(state.manualSignupPhoneSmsEnabled, false);
+  assert.equal(state.manualAddEmailInputRequired, false);
+  assert.equal(state.email, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.registrationEmailState)), {
+    current: '',
+    previous: '',
+    source: '',
+    updatedAt: 0,
+  });
+  assert.equal(state.accountIdentifierType, null);
+  assert.equal(state.accountIdentifier, '');
+  assert.equal(state.signupPhoneNumber, '');
+  assert.equal(started.options.normalHeroModeEnabled, false);
+});
+
+test('xiaohongshu auto-run clears stale Normal Hero identity before checkout start', async () => {
+  let state = {
+    normalHeroModeEnabled: true,
+    manualSignupPhoneSmsEnabled: true,
+    manualAddEmailInputRequired: true,
+    signupMethod: 'phone',
+    resolvedSignupMethod: 'phone',
+    signupPhoneNumber: '+57 (324) 132 10 49',
+    accountIdentifierType: 'phone',
+    accountIdentifier: '+57 (324) 132 10 49',
+    email: 'HeroUser@Example.COM',
+    registrationEmailState: {
+      current: 'HeroUser@Example.COM',
+      previous: 'HeroUser@Example.COM',
+      source: 'normal_hero_start',
+      updatedAt: 1,
+    },
+  };
+  let started = null;
+  const router = loadMessageRouterModule().createMessageRouter({
+    addLog: async () => {},
+    buildXiaohongshuRuntimeReset: () => ({}),
+    clearStopRequest: () => {},
+    getPendingAutoRunTimerPlan: () => null,
+    getState: async () => state,
+    isAutoRunLockedState: () => false,
+    normalizeRunCount: (value) => Math.max(1, Math.floor(Number(value) || 1)),
+    getNodeIdsForState: () => [
+      'open-chatgpt',
+      'submit-signup-email',
+      'plus-checkout-create',
+      'sub2api-session-import',
+    ],
+    setState: async (patch) => {
+      state = { ...state, ...patch };
+    },
+    startAutoRunLoop: (totalRuns, options) => {
+      started = { totalRuns, options };
+    },
+    validateAutoRunStart: () => ({ ok: true, errors: [] }),
+  });
+
+  const response = await router.handleMessage({
+    type: 'AUTO_RUN_XIAOHONGSHU',
+    source: 'sidepanel',
+    payload: {
+      accessToken: 'xiaohongshu-token',
+    },
+  }, {});
+
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), { ok: true });
+  assert.equal(state.xiaohongshuModeEnabled, true);
+  assert.equal(state.normalHeroModeEnabled, false);
+  assert.equal(state.manualSignupPhoneSmsEnabled, false);
+  assert.equal(state.email, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.registrationEmailState)), {
+    current: '',
+    previous: '',
+    source: '',
+    updatedAt: 0,
+  });
+  assert.equal(state.accountIdentifierType, null);
+  assert.equal(state.accountIdentifier, '');
+  assert.equal(state.signupPhoneNumber, '');
+  assert.equal(started.options.xiaohongshuModeEnabled, true);
+  assert.equal(started.options.mode, 'continue');
+});
+
+test('ordinary signup email generation ignores stale Normal Hero startup email', async () => {
+  const calls = [];
+  const helpers = loadSignupFlowHelpersModule().createSignupFlowHelpers({
+    fetchGeneratedEmail: async (state) => {
+      calls.push(['fetchGeneratedEmail', state.email, state.registrationEmailState, state.manualAddEmailInputRequired]);
+      return 'generated@example.com';
+    },
+    isGeneratedAliasProvider: () => false,
+    isHotmailProvider: () => false,
+    isLuckmailProvider: () => false,
+    persistRegistrationEmailState: async (_state, email, options) => {
+      calls.push(['persistRegistrationEmailState', email, options]);
+    },
+  });
+
+  const email = await helpers.resolveSignupEmailForFlow({
+    normalHeroModeEnabled: false,
+    manualSignupPhoneSmsEnabled: false,
+    manualAddEmailInputRequired: true,
+    email: 'HeroUser@Example.COM',
+    registrationEmailState: {
+      current: 'HeroUser@Example.COM',
+      previous: 'HeroUser@Example.COM',
+      source: 'normal_hero_start',
+      updatedAt: 1,
+    },
+    emailGenerator: 'duck',
+  });
+
+  assert.equal(email, 'generated@example.com');
+  assert.equal(calls[0][0], 'fetchGeneratedEmail');
+  assert.equal(calls[0][1], null);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])), {
+    current: '',
+    previous: '',
+    source: '',
+    updatedAt: 0,
+  });
+  assert.equal(calls[0][3], false);
 });
 
 test('Normal Hero add-email uses startup email and only prompts after email is already used', async () => {

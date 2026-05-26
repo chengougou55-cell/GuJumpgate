@@ -320,6 +320,37 @@
       };
     }
 
+    function isNormalHeroRegistrationEmailState(state = {}) {
+      const source = String(state?.registrationEmailState?.source || '').trim().toLowerCase();
+      return Boolean(
+        state?.manualAddEmailInputRequired
+        || source === 'normal_hero_start'
+        || source === 'normal_hero_checkout'
+      );
+    }
+
+    function shouldIgnoreStaleNormalHeroEmail(state = {}) {
+      return !Boolean(state?.normalHeroModeEnabled || state?.manualSignupPhoneSmsEnabled)
+        && isNormalHeroRegistrationEmailState(state);
+    }
+
+    function buildEmailResolutionState(state = {}) {
+      if (!shouldIgnoreStaleNormalHeroEmail(state)) {
+        return state;
+      }
+      return {
+        ...state,
+        email: null,
+        registrationEmailState: {
+          current: '',
+          previous: '',
+          source: '',
+          updatedAt: 0,
+        },
+        manualAddEmailInputRequired: false,
+      };
+    }
+
     async function persistResolvedSignupEmail(resolvedEmail, state = {}, options = {}) {
       if (resolvedEmail === state.email && !options?.preserveAccountIdentity) {
         return;
@@ -348,33 +379,34 @@
     }
 
     async function resolveSignupEmailForFlow(state, options = {}) {
-      let resolvedEmail = state.email;
+      const emailResolutionState = buildEmailResolutionState(state || {});
+      let resolvedEmail = emailResolutionState.email;
       let generatedEmailAlreadyPersisted = false;
-      if (isHotmailProvider(state)) {
+      if (isHotmailProvider(emailResolutionState)) {
         const account = await ensureHotmailAccountForFlow({
           allowAllocate: true,
           markUsed: true,
-          preferredAccountId: state.currentHotmailAccountId || null,
+          preferredAccountId: emailResolutionState.currentHotmailAccountId || null,
         });
         resolvedEmail = account.registrationAliasEmail || account.email;
-      } else if (isLuckmailProvider(state)) {
+      } else if (isLuckmailProvider(emailResolutionState)) {
         const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
         resolvedEmail = purchase.email_address;
-      } else if (isGeneratedAliasProvider(state)) {
-        if (Boolean(state?.mail2925UseAccountPool)
-          && String(state?.mailProvider || '').trim().toLowerCase() === '2925'
+      } else if (isGeneratedAliasProvider(emailResolutionState)) {
+        if (Boolean(emailResolutionState?.mail2925UseAccountPool)
+          && String(emailResolutionState?.mailProvider || '').trim().toLowerCase() === '2925'
           && typeof ensureMail2925AccountForFlow === 'function') {
           await ensureMail2925AccountForFlow({
             allowAllocate: true,
-            preferredAccountId: state.currentMail2925AccountId || null,
+            preferredAccountId: emailResolutionState.currentMail2925AccountId || null,
             markUsed: true,
           });
         }
-        if (!isReusableGeneratedAliasEmail?.(state, resolvedEmail)) {
-          resolvedEmail = buildGeneratedAliasEmail(state);
+        if (!isReusableGeneratedAliasEmail?.(emailResolutionState, resolvedEmail)) {
+          resolvedEmail = buildGeneratedAliasEmail(emailResolutionState);
         }
       } else if (!resolvedEmail && typeof fetchGeneratedEmail === 'function') {
-        resolvedEmail = await fetchGeneratedEmail(state, options);
+        resolvedEmail = await fetchGeneratedEmail(emailResolutionState, options);
         generatedEmailAlreadyPersisted = true;
       }
 
@@ -383,7 +415,7 @@
       }
 
       if (!generatedEmailAlreadyPersisted || options?.preserveAccountIdentity) {
-        await persistResolvedSignupEmail(resolvedEmail, state, {
+        await persistResolvedSignupEmail(resolvedEmail, emailResolutionState, {
           ...options,
           generatedEmailAlreadyPersisted,
         });

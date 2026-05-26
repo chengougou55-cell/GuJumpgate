@@ -531,6 +531,45 @@
       };
     }
 
+    function isNormalHeroRegistrationEmailState(state = {}) {
+      const source = String(state?.registrationEmailState?.source || '').trim().toLowerCase();
+      return Boolean(
+        state?.manualAddEmailInputRequired
+        || source === 'normal_hero_start'
+        || source === 'normal_hero_checkout'
+      );
+    }
+
+    function buildNormalHeroRuntimeReset(state = {}) {
+      const updates = {
+        normalHeroModeEnabled: false,
+        manualSignupPhoneSmsEnabled: false,
+        manualAddEmailInputRequired: false,
+        step8VerificationTargetEmail: '',
+        bindEmailSubmitted: false,
+      };
+      if (isNormalHeroRegistrationEmailState(state)) {
+        updates.email = null;
+        updates.registrationEmailState = {
+          current: '',
+          previous: '',
+          source: '',
+          updatedAt: 0,
+        };
+        if (String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone') {
+          updates.accountIdentifierType = null;
+          updates.accountIdentifier = '';
+        }
+        updates.signupPhoneNumber = '';
+        updates.signupPhoneActivation = null;
+        updates.signupPhoneCompletedActivation = null;
+        updates.currentPhoneVerificationCode = '';
+        updates.signupPhoneVerificationRequestedAt = null;
+        updates.signupPhoneVerificationPurpose = '';
+      }
+      return updates;
+    }
+
     async function autoRunLoop(totalRuns, options = {}) {
       let currentRuntime = runtime.get();
       if (currentRuntime.autoRunActive) {
@@ -728,10 +767,7 @@
                 currentPhoneVerificationCode: '',
                 signupPhoneVerificationRequestedAt: null,
                 signupPhoneVerificationPurpose: '',
-              } : {
-                normalHeroModeEnabled: false,
-                manualSignupPhoneSmsEnabled: false,
-              }),
+              } : buildNormalHeroRuntimeReset(prevState)),
               ...(preserveXiaohongshuRuntime ? {
                 xiaohongshuModeEnabled: true,
                 xiaohongshuAccessToken: prevState.xiaohongshuAccessToken,
