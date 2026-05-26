@@ -251,6 +251,89 @@
         : { country: 'US', currency: 'USD' };
     }
 
+    function normalizeCloudCheckoutPaymentMethod(value = '', fallback = PLUS_PAYMENT_METHOD_PAYPAL) {
+      const normalized = normalizePlusPaymentMethod(value || fallback);
+      return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
+    }
+
+    function normalizeCloudCheckoutCountry(value = '', fallback = 'US') {
+      const fallbackValue = String(fallback || 'US').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2) || 'US';
+      const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+      return normalized.length === 2 ? normalized : fallbackValue;
+    }
+
+    function normalizeCloudCheckoutCurrency(value = '', fallback = 'USD') {
+      const fallbackValue = String(fallback || 'USD').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'USD';
+      const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+      return normalized.length === 3 ? normalized : fallbackValue;
+    }
+
+    function getCloudCheckoutRequestDetails(paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL, state = {}) {
+      const requestPaymentMethod = normalizeCloudCheckoutPaymentMethod(
+        state?.plusCheckoutCloudConversionPaymentMethod,
+        paymentMethod
+      );
+      const fallbackBillingDetails = getCheckoutBillingDetailsForPaymentMethod(requestPaymentMethod);
+      return {
+        paymentMethod: requestPaymentMethod,
+        country: normalizeCloudCheckoutCountry(state?.plusCheckoutCloudConversionCountry, fallbackBillingDetails.country),
+        currency: normalizeCloudCheckoutCurrency(state?.plusCheckoutCloudConversionCurrency, fallbackBillingDetails.currency),
+      };
+    }
+
+    function maskCloudCheckoutSecret(value = '', visibleStart = 6, visibleEnd = 4) {
+      const text = String(value || '');
+      if (!text) {
+        return '';
+      }
+      if (text.length <= visibleStart + visibleEnd + 3) {
+        return `${text.slice(0, Math.min(2, text.length))}***`;
+      }
+      return `${text.slice(0, visibleStart)}...${text.slice(-visibleEnd)}`;
+    }
+
+    function redactCloudCheckoutHeadersForLog(headers = {}) {
+      return Object.entries(headers || {}).reduce((acc, [key, value]) => {
+        acc[key] = String(key || '').toLowerCase() === 'x-api-key'
+          ? maskCloudCheckoutSecret(value)
+          : value;
+        return acc;
+      }, {});
+    }
+
+    function redactCloudCheckoutBodyForLog(body = {}) {
+      return {
+        ...(body && typeof body === 'object' ? body : {}),
+        accessToken: maskCloudCheckoutSecret(body?.accessToken),
+      };
+    }
+
+    function redactCloudCheckoutPayloadForLog(value, depth = 0) {
+      if (!value || typeof value !== 'object' || depth > 5) {
+        return value;
+      }
+      if (Array.isArray(value)) {
+        return value.map((item) => redactCloudCheckoutPayloadForLog(item, depth + 1));
+      }
+      return Object.entries(value).reduce((acc, [key, item]) => {
+        const normalizedKey = String(key || '').toLowerCase();
+        acc[key] = /^(access_?token|api_?key|authorization|secret|password)$/i.test(normalizedKey)
+          ? maskCloudCheckoutSecret(item)
+          : redactCloudCheckoutPayloadForLog(item, depth + 1);
+        return acc;
+      }, {});
+    }
+
+    function stringifyCloudCheckoutLogPayload(payload, maxLength = 3000) {
+      let text = '';
+      try {
+        text = JSON.stringify(payload);
+      } catch {
+        text = String(payload || '');
+      }
+      return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+    }
+
     function formatCloudCheckoutErrorDetail(value, fallback = '') {
       if (typeof value === 'string') {
         return value.trim() || fallback;
@@ -2609,7 +2692,7 @@ function FindProxyForURL(url, host) {
         throw new Error('步骤 6：云端支付转换服务地址不是有效的 HTTP/HTTPS URL。');
       }
 
-      const billingDetails = getCheckoutBillingDetailsForPaymentMethod(paymentMethod);
+      const cloudRequestDetails = getCloudCheckoutRequestDetails(paymentMethod, state);
       const headers = {
         Accept: 'application/json',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -2619,17 +2702,41 @@ function FindProxyForURL(url, host) {
       if (apiKey) {
         headers['X-API-Key'] = apiKey;
       }
+      const requestBody = {
+        accessToken: token,
+        paymentMethod: cloudRequestDetails.paymentMethod,
+        country: cloudRequestDetails.country,
+        currency: cloudRequestDetails.currency,
+      };
 
-      const { response, data } = await fetchJsonWithTimeout(apiUrl, {
+      await addLog(`步骤 6：云端支付转换请求报文：${stringifyCloudCheckoutLogPayload({
+        url: apiUrl,
         method: 'POST',
-        headers,
-        body: JSON.stringify({
-          accessToken: token,
-          paymentMethod: normalizePlusPaymentMethod(paymentMethod),
-          country: billingDetails.country,
-          currency: billingDetails.currency,
-        }),
-      }, 45000);
+        headers: redactCloudCheckoutHeadersForLog(headers),
+        body: redactCloudCheckoutBodyForLog(requestBody),
+      })}`, 'info');
+
+      let response = null;
+      let data = null;
+      try {
+        ({ response, data } = await fetchJsonWithTimeout(apiUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestBody),
+        }, 45000));
+      } catch (error) {
+        await addLog(`步骤 6：云端支付转换响应报文：${stringifyCloudCheckoutLogPayload({
+          ok: false,
+          error: error?.message || String(error || '未知错误'),
+        })}`, 'warn');
+        throw error;
+      }
+      await addLog(`步骤 6：云端支付转换响应报文：${stringifyCloudCheckoutLogPayload({
+        status: response?.status || 0,
+        statusText: response?.statusText || '',
+        ok: Boolean(response?.ok),
+        body: redactCloudCheckoutPayloadForLog(data),
+      })}`, response?.ok ? 'info' : 'warn');
 
       const targetCheckoutUrl = String(
         data?.preferredCheckoutUrl
@@ -2653,8 +2760,8 @@ function FindProxyForURL(url, host) {
             hostedCheckoutUrl: '',
             convertedCheckoutUrl: '',
             preferredCheckoutUrl: '',
-            country: String(data?.country || billingDetails.country).trim() || billingDetails.country,
-            currency: String(data?.currency || billingDetails.currency).trim() || billingDetails.currency,
+            country: String(data?.country || cloudRequestDetails.country).trim() || cloudRequestDetails.country,
+            currency: String(data?.currency || cloudRequestDetails.currency).trim() || cloudRequestDetails.currency,
             checkoutSource: CLOUD_CHECKOUT_ALREADY_PAID_SOURCE,
             alreadyPaid: true,
             alreadyPaidDetail: detail,
@@ -2671,8 +2778,8 @@ function FindProxyForURL(url, host) {
         hostedCheckoutUrl: String(data?.hostedCheckoutUrl || '').trim(),
         convertedCheckoutUrl: String(data?.chatgptCheckoutUrl || data?.convertedCheckoutUrl || '').trim(),
         preferredCheckoutUrl: targetCheckoutUrl,
-        country: String(data?.country || billingDetails.country).trim() || billingDetails.country,
-        currency: String(data?.currency || billingDetails.currency).trim() || billingDetails.currency,
+        country: String(data?.country || cloudRequestDetails.country).trim() || cloudRequestDetails.country,
+        currency: String(data?.currency || cloudRequestDetails.currency).trim() || cloudRequestDetails.currency,
         checkoutSource: 'cloud-converted-checkout',
       };
     }
@@ -2967,6 +3074,8 @@ function FindProxyForURL(url, host) {
         buildHostedCheckoutGuestProfile,
         buildHostedCheckoutReplacementCard,
         ensureHostedCheckoutEmail,
+        generateCloudCheckoutFromApi,
+        getCloudCheckoutRequestDetails,
         getHostedCheckoutRuntimeConfig,
         pollHostedCheckoutVerificationCodeWithResend,
         runHostedCheckoutAutomation,

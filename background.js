@@ -1090,6 +1090,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   plusCheckoutCloudConversionEnabled: true,
   plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
   plusCheckoutCloudConversionApiKey: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY,
+  plusCheckoutCloudConversionPaymentMethod: PLUS_PAYMENT_METHOD_PAYPAL,
+  plusCheckoutCloudConversionCountry: 'US',
+  plusCheckoutCloudConversionCurrency: 'USD',
   plusCheckoutConversionProxyUrl: '',
   hostedCheckoutVerificationPopupDelaySeconds: 20,
   hostedCheckoutVerificationUrl: '',
@@ -1973,6 +1976,23 @@ function normalizePlusPaymentMethod(value = '') {
     return PLUS_PAYMENT_METHOD_GPC_HELPER;
   }
   return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
+}
+
+function normalizeCloudCheckoutPaymentMethod(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
+}
+
+function normalizeCloudCheckoutCountry(value = '', fallback = 'US') {
+  const fallbackValue = String(fallback || 'US').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2) || 'US';
+  const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+  return normalized.length === 2 ? normalized : fallbackValue;
+}
+
+function normalizeCloudCheckoutCurrency(value = '', fallback = 'USD') {
+  const fallbackValue = String(fallback || 'USD').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'USD';
+  const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+  return normalized.length === 3 ? normalized : fallbackValue;
 }
 
 function normalizeFiveSimCountryId(value, fallback = FIVE_SIM_COUNTRY_ID) {
@@ -3178,6 +3198,12 @@ function normalizePersistentSettingValue(key, value) {
       }
     case 'plusCheckoutCloudConversionApiKey':
       return String(value || '').trim();
+    case 'plusCheckoutCloudConversionPaymentMethod':
+      return normalizeCloudCheckoutPaymentMethod(value);
+    case 'plusCheckoutCloudConversionCountry':
+      return normalizeCloudCheckoutCountry(value);
+    case 'plusCheckoutCloudConversionCurrency':
+      return normalizeCloudCheckoutCurrency(value);
     case 'plusCheckoutConversionProxyUrl': {
       const rawValue = String(value || '').trim();
       if (!rawValue) {

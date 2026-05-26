@@ -1176,6 +1176,27 @@ header {
   color: var(--red);
 }
 
+.plus-checkout-cloud-params-inline {
+  flex-wrap: wrap;
+}
+
+.plus-checkout-cloud-payment-select {
+  flex: 1 1 160px;
+  min-width: 120px;
+}
+
+.plus-checkout-cloud-country-input {
+  flex: 0 0 64px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.plus-checkout-cloud-currency-input {
+  flex: 0 0 76px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
 .input-with-icon {
   position: relative;
   flex: 1;

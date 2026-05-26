@@ -206,6 +206,10 @@ const rowPlusCheckoutCloudConversionApiUrl = document.getElementById('row-plus-c
 const inputPlusCheckoutCloudConversionApiUrl = document.getElementById('input-plus-checkout-cloud-conversion-api-url');
 const rowPlusCheckoutCloudConversionApiKey = document.getElementById('row-plus-checkout-cloud-conversion-api-key');
 const inputPlusCheckoutCloudConversionApiKey = document.getElementById('input-plus-checkout-cloud-conversion-api-key');
+const rowPlusCheckoutCloudConversionParams = document.getElementById('row-plus-checkout-cloud-conversion-params');
+const selectPlusCheckoutCloudConversionPaymentMethod = document.getElementById('select-plus-checkout-cloud-conversion-payment-method');
+const inputPlusCheckoutCloudConversionCountry = document.getElementById('input-plus-checkout-cloud-conversion-country');
+const inputPlusCheckoutCloudConversionCurrency = document.getElementById('input-plus-checkout-cloud-conversion-currency');
 const displayPlusCheckoutConversionProxyTestResult = document.getElementById('display-plus-checkout-conversion-proxy-test-result');
 const rowHostedCheckoutVerificationUrl = document.getElementById('row-hosted-checkout-verification-url');
 const inputHostedCheckoutVerificationUrl = document.getElementById('input-hosted-checkout-verification-url');
@@ -3193,6 +3197,23 @@ function normalizePlusCheckoutCloudConversionApiKeyValue(value = '') {
   return String(value || '').trim();
 }
 
+function normalizePlusCheckoutCloudConversionPaymentMethodValue(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
+}
+
+function normalizePlusCheckoutCloudConversionCountryValue(value = '', fallback = 'US') {
+  const fallbackValue = String(fallback || 'US').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2) || 'US';
+  const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+  return normalized.length === 2 ? normalized : fallbackValue;
+}
+
+function normalizePlusCheckoutCloudConversionCurrencyValue(value = '', fallback = 'USD') {
+  const fallbackValue = String(fallback || 'USD').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'USD';
+  const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+  return normalized.length === 3 ? normalized : fallbackValue;
+}
+
 function normalizeHostedCheckoutVerificationUrlValue(value = '') {
   const rawValue = String(value || '').trim();
   if (!rawValue) {
@@ -4636,6 +4657,15 @@ function collectSettingsPayload() {
       : true,
     plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
     plusCheckoutCloudConversionApiKey: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY,
+    plusCheckoutCloudConversionPaymentMethod: typeof selectPlusCheckoutCloudConversionPaymentMethod !== 'undefined' && selectPlusCheckoutCloudConversionPaymentMethod
+      ? normalizePlusCheckoutCloudConversionPaymentMethodValue(selectPlusCheckoutCloudConversionPaymentMethod.value)
+      : PLUS_PAYMENT_METHOD_PAYPAL,
+    plusCheckoutCloudConversionCountry: typeof inputPlusCheckoutCloudConversionCountry !== 'undefined' && inputPlusCheckoutCloudConversionCountry
+      ? normalizePlusCheckoutCloudConversionCountryValue(inputPlusCheckoutCloudConversionCountry.value)
+      : 'US',
+    plusCheckoutCloudConversionCurrency: typeof inputPlusCheckoutCloudConversionCurrency !== 'undefined' && inputPlusCheckoutCloudConversionCurrency
+      ? normalizePlusCheckoutCloudConversionCurrencyValue(inputPlusCheckoutCloudConversionCurrency.value)
+      : 'USD',
     plusCheckoutConversionProxyUrl: typeof inputPlusCheckoutConversionProxy !== 'undefined' && inputPlusCheckoutConversionProxy
       ? normalizePlusCheckoutConversionProxyUrlValue(inputPlusCheckoutConversionProxy.value)
       : '',
@@ -10419,6 +10449,21 @@ function applySettingsState(state) {
   }
   if (typeof inputPlusCheckoutCloudConversionApiKey !== 'undefined' && inputPlusCheckoutCloudConversionApiKey) {
     inputPlusCheckoutCloudConversionApiKey.value = normalizePlusCheckoutCloudConversionApiKeyValue(state?.plusCheckoutCloudConversionApiKey || '');
+  }
+  if (typeof selectPlusCheckoutCloudConversionPaymentMethod !== 'undefined' && selectPlusCheckoutCloudConversionPaymentMethod) {
+    selectPlusCheckoutCloudConversionPaymentMethod.value = normalizePlusCheckoutCloudConversionPaymentMethodValue(
+      state?.plusCheckoutCloudConversionPaymentMethod || PLUS_PAYMENT_METHOD_PAYPAL
+    );
+  }
+  if (typeof inputPlusCheckoutCloudConversionCountry !== 'undefined' && inputPlusCheckoutCloudConversionCountry) {
+    inputPlusCheckoutCloudConversionCountry.value = normalizePlusCheckoutCloudConversionCountryValue(
+      state?.plusCheckoutCloudConversionCountry || 'US'
+    );
+  }
+  if (typeof inputPlusCheckoutCloudConversionCurrency !== 'undefined' && inputPlusCheckoutCloudConversionCurrency) {
+    inputPlusCheckoutCloudConversionCurrency.value = normalizePlusCheckoutCloudConversionCurrencyValue(
+      state?.plusCheckoutCloudConversionCurrency || 'USD'
+    );
   }
   if (typeof inputPlusCheckoutConversionProxy !== 'undefined' && inputPlusCheckoutConversionProxy) {
     inputPlusCheckoutConversionProxy.value = normalizePlusCheckoutConversionProxyUrlValue(state?.plusCheckoutConversionProxyUrl || '');
@@ -16240,11 +16285,23 @@ function updatePlusCheckoutConversionModeUi() {
   if (typeof rowPlusCheckoutCloudConversionApiKey !== 'undefined' && rowPlusCheckoutCloudConversionApiKey) {
     rowPlusCheckoutCloudConversionApiKey.style.display = cloudRowsVisible ? '' : 'none';
   }
+  if (typeof rowPlusCheckoutCloudConversionParams !== 'undefined' && rowPlusCheckoutCloudConversionParams) {
+    rowPlusCheckoutCloudConversionParams.style.display = cloudRowsVisible ? '' : 'none';
+  }
   if (typeof inputPlusCheckoutCloudConversionApiUrl !== 'undefined' && inputPlusCheckoutCloudConversionApiUrl) {
     inputPlusCheckoutCloudConversionApiUrl.disabled = !cloudEnabled;
   }
   if (typeof inputPlusCheckoutCloudConversionApiKey !== 'undefined' && inputPlusCheckoutCloudConversionApiKey) {
     inputPlusCheckoutCloudConversionApiKey.disabled = !cloudEnabled;
+  }
+  if (typeof selectPlusCheckoutCloudConversionPaymentMethod !== 'undefined' && selectPlusCheckoutCloudConversionPaymentMethod) {
+    selectPlusCheckoutCloudConversionPaymentMethod.disabled = !cloudEnabled;
+  }
+  if (typeof inputPlusCheckoutCloudConversionCountry !== 'undefined' && inputPlusCheckoutCloudConversionCountry) {
+    inputPlusCheckoutCloudConversionCountry.disabled = !cloudEnabled;
+  }
+  if (typeof inputPlusCheckoutCloudConversionCurrency !== 'undefined' && inputPlusCheckoutCloudConversionCurrency) {
+    inputPlusCheckoutCloudConversionCurrency.disabled = !cloudEnabled;
   }
 
   if (cloudEnabled) {
@@ -16418,6 +16475,31 @@ inputPlusCheckoutCloudConversionApiKey?.addEventListener('input', () => {
 });
 inputPlusCheckoutCloudConversionApiKey?.addEventListener('blur', () => {
   inputPlusCheckoutCloudConversionApiKey.value = normalizePlusCheckoutCloudConversionApiKeyValue(inputPlusCheckoutCloudConversionApiKey.value);
+  saveSettings({ silent: true }).catch(() => { });
+});
+selectPlusCheckoutCloudConversionPaymentMethod?.addEventListener('change', () => {
+  selectPlusCheckoutCloudConversionPaymentMethod.value = normalizePlusCheckoutCloudConversionPaymentMethodValue(
+    selectPlusCheckoutCloudConversionPaymentMethod.value
+  );
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+inputPlusCheckoutCloudConversionCountry?.addEventListener('input', () => {
+  inputPlusCheckoutCloudConversionCountry.value = String(inputPlusCheckoutCloudConversionCountry.value || '').toUpperCase();
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputPlusCheckoutCloudConversionCountry?.addEventListener('blur', () => {
+  inputPlusCheckoutCloudConversionCountry.value = normalizePlusCheckoutCloudConversionCountryValue(inputPlusCheckoutCloudConversionCountry.value);
+  saveSettings({ silent: true }).catch(() => { });
+});
+inputPlusCheckoutCloudConversionCurrency?.addEventListener('input', () => {
+  inputPlusCheckoutCloudConversionCurrency.value = String(inputPlusCheckoutCloudConversionCurrency.value || '').toUpperCase();
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputPlusCheckoutCloudConversionCurrency?.addEventListener('blur', () => {
+  inputPlusCheckoutCloudConversionCurrency.value = normalizePlusCheckoutCloudConversionCurrencyValue(inputPlusCheckoutCloudConversionCurrency.value);
   saveSettings({ silent: true }).catch(() => { });
 });
 
@@ -17520,6 +17602,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.plusCheckoutCloudConversionApiKey !== undefined && inputPlusCheckoutCloudConversionApiKey) {
         inputPlusCheckoutCloudConversionApiKey.value = normalizePlusCheckoutCloudConversionApiKeyValue(message.payload.plusCheckoutCloudConversionApiKey);
+      }
+      if (message.payload.plusCheckoutCloudConversionPaymentMethod !== undefined && selectPlusCheckoutCloudConversionPaymentMethod) {
+        selectPlusCheckoutCloudConversionPaymentMethod.value = normalizePlusCheckoutCloudConversionPaymentMethodValue(
+          message.payload.plusCheckoutCloudConversionPaymentMethod
+        );
+      }
+      if (message.payload.plusCheckoutCloudConversionCountry !== undefined && inputPlusCheckoutCloudConversionCountry) {
+        inputPlusCheckoutCloudConversionCountry.value = normalizePlusCheckoutCloudConversionCountryValue(
+          message.payload.plusCheckoutCloudConversionCountry
+        );
+      }
+      if (message.payload.plusCheckoutCloudConversionCurrency !== undefined && inputPlusCheckoutCloudConversionCurrency) {
+        inputPlusCheckoutCloudConversionCurrency.value = normalizePlusCheckoutCloudConversionCurrencyValue(
+          message.payload.plusCheckoutCloudConversionCurrency
+        );
       }
       if (message.payload.plusCheckoutConversionProxyUrl !== undefined && inputPlusCheckoutConversionProxy) {
         inputPlusCheckoutConversionProxy.value = normalizePlusCheckoutConversionProxyUrlValue(message.payload.plusCheckoutConversionProxyUrl);

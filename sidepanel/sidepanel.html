@@ -355,6 +355,21 @@
           <span id="display-plus-checkout-conversion-proxy-test-result" class="data-value mono plus-checkout-conversion-proxy-test-result">未测试</span>
         </div>
       </div>
+      <div class="data-row" id="row-plus-checkout-cloud-conversion-params" style="display:none;">
+        <span class="data-label">云端参数</span>
+        <div class="data-inline plus-checkout-cloud-params-inline">
+          <select id="select-plus-checkout-cloud-conversion-payment-method" class="data-select plus-checkout-cloud-payment-select"
+            title="云端支付转换请求体 paymentMethod">
+            <option value="paypal">paypal</option>
+            <option value="gopay">gopay</option>
+          </select>
+          <input type="text" id="input-plus-checkout-cloud-conversion-country" class="data-input mono plus-checkout-cloud-country-input"
+            value="US" maxlength="2" placeholder="US" title="云端支付转换请求体 country" />
+          <input type="text" id="input-plus-checkout-cloud-conversion-currency" class="data-input mono plus-checkout-cloud-currency-input"
+            value="USD" maxlength="3" placeholder="USD" title="云端支付转换请求体 currency" />
+          <span class="setting-caption">请求体参数</span>
+        </div>
+      </div>
       <div class="data-row" id="row-hosted-checkout-verification-url" style="display:none;">
         <span class="data-label">验证码接口</span>
         <input type="text" id="input-hosted-checkout-verification-url" class="data-input"
