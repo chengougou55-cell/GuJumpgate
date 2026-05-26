@@ -354,6 +354,7 @@
         await persistRegistrationEmailState(latestState, resolvedEmail, {
           source: activeFetchLoginCodeStepKey === 'bind-email' ? 'bind_email' : 'step8_add_email',
           preserveAccountIdentity: true,
+          normalHeroEmailRuntime: manualAddEmailMode || Boolean(latestState?.normalHeroEmailRuntime),
         });
         persistedState = typeof getState === 'function' ? await getState() : latestState;
       } else {
@@ -374,6 +375,7 @@
           email: resolvedEmail,
           step8VerificationTargetEmail: displayedEmail,
           ...(manualAddEmailMode ? { manualAddEmailInputRequired: true } : {}),
+          ...(manualAddEmailMode || latestState?.normalHeroEmailRuntime ? { normalHeroEmailRuntime: true } : {}),
         },
         pageState: {
           state: result?.directOAuthConsentPage ? 'oauth_consent_page' : 'verification_page',
@@ -665,6 +667,7 @@
           email: preparedState?.email || '',
           step8VerificationTargetEmail: preparedState?.step8VerificationTargetEmail || nextPageState?.displayedEmail || '',
           manualAddEmailInputRequired: Boolean(preparedState?.manualAddEmailInputRequired),
+          normalHeroEmailRuntime: Boolean(preparedState?.normalHeroEmailRuntime || shouldPromptManualAddEmail(preparedState)),
         });
       }
     }

@@ -119,6 +119,7 @@
         'accountIdentifierType',
         'accountIdentifier',
         'registrationEmailState',
+        'normalHeroEmailRuntime',
         'email',
         'password',
         'lastEmailTimestamp',

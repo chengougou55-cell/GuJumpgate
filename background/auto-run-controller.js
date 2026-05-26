@@ -534,7 +534,8 @@
     function isNormalHeroRegistrationEmailState(state = {}) {
       const source = String(state?.registrationEmailState?.source || '').trim().toLowerCase();
       return Boolean(
-        state?.manualAddEmailInputRequired
+        state?.normalHeroEmailRuntime
+        || state?.manualAddEmailInputRequired
         || source === 'normal_hero_start'
         || source === 'normal_hero_checkout'
       );
@@ -556,6 +557,7 @@
           source: '',
           updatedAt: 0,
         };
+        updates.normalHeroEmailRuntime = false;
         if (String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone') {
           updates.accountIdentifierType = null;
           updates.accountIdentifier = '';
@@ -750,6 +752,7 @@
                     source: 'normal_hero_start',
                     updatedAt: 0,
                   },
+                normalHeroEmailRuntime: true,
                 manualAddEmailInputRequired: Boolean(prevState.manualAddEmailInputRequired),
                 signupPhoneNumber: String(
                   prevState.signupPhoneNumber

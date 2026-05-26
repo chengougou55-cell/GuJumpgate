@@ -106,6 +106,7 @@ test('Normal Hero auto-run payload stores startup email while preserving phone i
   assert.equal(state.email, 'herouser@example.com');
   assert.equal(state.registrationEmailState.current, 'herouser@example.com');
   assert.equal(state.registrationEmailState.source, 'normal_hero_start');
+  assert.equal(state.normalHeroEmailRuntime, true);
   assert.equal(state.manualAddEmailInputRequired, true);
   assert.equal(started.totalRuns, 1);
   assert.equal(started.options.normalHeroModeEnabled, true);
@@ -123,6 +124,7 @@ test('ordinary auto-run clears stale Normal Hero startup email before start', as
     accountIdentifierType: 'phone',
     accountIdentifier: '+57 (324) 132 10 49',
     email: 'HeroUser@Example.COM',
+    normalHeroEmailRuntime: true,
     registrationEmailState: {
       current: 'HeroUser@Example.COM',
       previous: 'HeroUser@Example.COM',
@@ -162,6 +164,7 @@ test('ordinary auto-run clears stale Normal Hero startup email before start', as
   assert.equal(state.manualSignupPhoneSmsEnabled, false);
   assert.equal(state.manualAddEmailInputRequired, false);
   assert.equal(state.email, null);
+  assert.equal(state.normalHeroEmailRuntime, false);
   assert.deepEqual(JSON.parse(JSON.stringify(state.registrationEmailState)), {
     current: '',
     previous: '',
@@ -185,6 +188,7 @@ test('xiaohongshu auto-run clears stale Normal Hero identity before checkout sta
     accountIdentifierType: 'phone',
     accountIdentifier: '+57 (324) 132 10 49',
     email: 'HeroUser@Example.COM',
+    normalHeroEmailRuntime: true,
     registrationEmailState: {
       current: 'HeroUser@Example.COM',
       previous: 'HeroUser@Example.COM',
@@ -229,6 +233,7 @@ test('xiaohongshu auto-run clears stale Normal Hero identity before checkout sta
   assert.equal(state.normalHeroModeEnabled, false);
   assert.equal(state.manualSignupPhoneSmsEnabled, false);
   assert.equal(state.email, null);
+  assert.equal(state.normalHeroEmailRuntime, false);
   assert.deepEqual(JSON.parse(JSON.stringify(state.registrationEmailState)), {
     current: '',
     previous: '',
@@ -281,6 +286,167 @@ test('ordinary signup email generation ignores stale Normal Hero startup email',
     updatedAt: 0,
   });
   assert.equal(calls[0][3], false);
+});
+
+test('ordinary signup email generation ignores Hero email after bind-email source changes', async () => {
+  const calls = [];
+  const helpers = loadSignupFlowHelpersModule().createSignupFlowHelpers({
+    fetchGeneratedEmail: async (state) => {
+      calls.push(['fetchGeneratedEmail', state.email, state.registrationEmailState, state.normalHeroEmailRuntime]);
+      return 'generated-after-bind@example.com';
+    },
+    isGeneratedAliasProvider: () => false,
+    isHotmailProvider: () => false,
+    isLuckmailProvider: () => false,
+    persistRegistrationEmailState: async (_state, email, options) => {
+      calls.push(['persistRegistrationEmailState', email, options]);
+    },
+  });
+
+  const email = await helpers.resolveSignupEmailForFlow({
+    normalHeroModeEnabled: false,
+    manualSignupPhoneSmsEnabled: false,
+    manualAddEmailInputRequired: false,
+    normalHeroEmailRuntime: true,
+    email: 'bound-hero@example.com',
+    registrationEmailState: {
+      current: 'bound-hero@example.com',
+      previous: 'herouser@example.com',
+      source: 'bind_email',
+      updatedAt: 2,
+    },
+    emailGenerator: 'duck',
+  });
+
+  assert.equal(email, 'generated-after-bind@example.com');
+  assert.equal(calls[0][0], 'fetchGeneratedEmail');
+  assert.equal(calls[0][1], null);
+  assert.equal(calls[0][3], false);
+});
+
+test('ordinary generated alias clears stale Hero runtime before persistence', async () => {
+  const calls = [];
+  const helpers = loadSignupFlowHelpersModule().createSignupFlowHelpers({
+    buildGeneratedAliasEmail: (state) => {
+      calls.push(['buildGeneratedAliasEmail', state.email, state.normalHeroEmailRuntime]);
+      return 'alias-after-hero@example.com';
+    },
+    isGeneratedAliasProvider: () => true,
+    isReusableGeneratedAliasEmail: () => false,
+    isHotmailProvider: () => false,
+    isLuckmailProvider: () => false,
+    persistRegistrationEmailState: async (state, email, options) => {
+      calls.push(['persistRegistrationEmailState', state.email, state.normalHeroEmailRuntime, email, options]);
+    },
+  });
+
+  const email = await helpers.resolveSignupEmailForFlow({
+    normalHeroModeEnabled: false,
+    manualSignupPhoneSmsEnabled: false,
+    manualAddEmailInputRequired: false,
+    normalHeroEmailRuntime: true,
+    email: 'bound-hero@example.com',
+    registrationEmailState: {
+      current: 'bound-hero@example.com',
+      previous: 'herouser@example.com',
+      source: 'bind_email',
+      updatedAt: 2,
+    },
+    emailGenerator: 'alias',
+  });
+
+  assert.equal(email, 'alias-after-hero@example.com');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ['buildGeneratedAliasEmail', null, false],
+    [
+      'persistRegistrationEmailState',
+      null,
+      false,
+      'alias-after-hero@example.com',
+      {
+        source: 'flow',
+        preserveAccountIdentity: false,
+      },
+    ],
+  ]);
+});
+
+test('email state writers clear stale Hero runtime unless explicitly preserved', () => {
+  const backgroundScript = fs.readFileSync(path.join(repoRoot, 'background.js'), 'utf8');
+  const setEmailStateMatch = backgroundScript.match(/async function setEmailStateSilently[\s\S]*?\n}\n\nasync function setEmailState/);
+  const persistEmailStateMatch = backgroundScript.match(/async function persistRegistrationEmailState[\s\S]*?\n}\n\nasync function setSignupPhoneStateSilently/);
+
+  assert.ok(setEmailStateMatch, 'setEmailStateSilently block should be present');
+  assert.match(
+    setEmailStateMatch[0],
+    /const nextNormalHeroEmailRuntime = options\?\.normalHeroEmailRuntime !== undefined[\s\S]*\? Boolean\(options\.normalHeroEmailRuntime\)[\s\S]*: false;/
+  );
+  assert.match(setEmailStateMatch[0], /updates\.normalHeroEmailRuntime = nextNormalHeroEmailRuntime;/);
+
+  assert.ok(persistEmailStateMatch, 'persistRegistrationEmailState block should be present');
+  assert.match(
+    persistEmailStateMatch[0],
+    /const nextNormalHeroEmailRuntime = options\?\.normalHeroEmailRuntime !== undefined[\s\S]*\? Boolean\(options\.normalHeroEmailRuntime\)[\s\S]*: false;/
+  );
+  assert.match(persistEmailStateMatch[0], /const updates = \{ normalHeroEmailRuntime: nextNormalHeroEmailRuntime \};/);
+  assert.match(persistEmailStateMatch[0], /preservedUpdates\.normalHeroEmailRuntime = nextNormalHeroEmailRuntime;/);
+  assert.match(persistEmailStateMatch[0], /updates\.normalHeroEmailRuntime = nextNormalHeroEmailRuntime;/);
+});
+
+test('xiaohongshu auto-run clears Hero email after bind-email source changes', async () => {
+  let state = {
+    normalHeroModeEnabled: false,
+    manualSignupPhoneSmsEnabled: false,
+    manualAddEmailInputRequired: false,
+    normalHeroEmailRuntime: true,
+    signupMethod: 'email',
+    resolvedSignupMethod: 'email',
+    email: 'bound-hero@example.com',
+    registrationEmailState: {
+      current: 'bound-hero@example.com',
+      previous: 'herouser@example.com',
+      source: 'bind_email',
+      updatedAt: 2,
+    },
+  };
+  const router = loadMessageRouterModule().createMessageRouter({
+    addLog: async () => {},
+    buildXiaohongshuRuntimeReset: () => ({}),
+    clearStopRequest: () => {},
+    getPendingAutoRunTimerPlan: () => null,
+    getState: async () => state,
+    isAutoRunLockedState: () => false,
+    normalizeRunCount: (value) => Math.max(1, Math.floor(Number(value) || 1)),
+    getNodeIdsForState: () => [
+      'open-chatgpt',
+      'submit-signup-email',
+      'plus-checkout-create',
+      'sub2api-session-import',
+    ],
+    setState: async (patch) => {
+      state = { ...state, ...patch };
+    },
+    startAutoRunLoop: () => {},
+    validateAutoRunStart: () => ({ ok: true, errors: [] }),
+  });
+
+  const response = await router.handleMessage({
+    type: 'AUTO_RUN_XIAOHONGSHU',
+    source: 'sidepanel',
+    payload: {
+      accessToken: 'xiaohongshu-token',
+    },
+  }, {});
+
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), { ok: true });
+  assert.equal(state.email, null);
+  assert.equal(state.normalHeroEmailRuntime, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.registrationEmailState)), {
+    current: '',
+    previous: '',
+    source: '',
+    updatedAt: 0,
+  });
 });
 
 test('Normal Hero add-email uses startup email and only prompts after email is already used', async () => {
@@ -340,6 +506,7 @@ test('Normal Hero add-email uses startup email and only prompts after email is a
     calls.filter((item) => item[0] === 'content' && item[1] === 'SUBMIT_ADD_EMAIL').map((item) => item[2].email),
     ['used@example.com', 'fresh@example.com']
   );
+  assert.equal(calls.find((item) => item[0] === 'persistEmail')?.[2]?.normalHeroEmailRuntime, true);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.find((item) => item[0] === 'complete'))), [
     'complete',
     'bind-email',
@@ -348,6 +515,7 @@ test('Normal Hero add-email uses startup email and only prompts after email is a
       email: 'fresh@example.com',
       step8VerificationTargetEmail: 'fresh@example.com',
       manualAddEmailInputRequired: true,
+      normalHeroEmailRuntime: true,
     },
   ]);
 });

@@ -1272,6 +1272,7 @@ const DEFAULT_STATE = {
   accountIdentifierType: null,
   accountIdentifier: '',
   registrationEmailState: { ...DEFAULT_REGISTRATION_EMAIL_STATE },
+  normalHeroEmailRuntime: false,
   email: null, // 运行时邮箱，由程序自动获取并写入，不能手动预填。
   password: null, // 运行时实际密码，由 customPassword 或程序自动生成后写入。
   accounts: [], // 已生成账号记录：{ email, password, createdAt }。
@@ -4035,6 +4036,9 @@ function isPhoneActivationForNumber(activation, phoneNumber) {
 async function setEmailStateSilently(email, options = {}) {
   const currentState = await getState();
   const preserveAccountIdentity = Boolean(options?.preserveAccountIdentity);
+  const nextNormalHeroEmailRuntime = options?.normalHeroEmailRuntime !== undefined
+    ? Boolean(options.normalHeroEmailRuntime)
+    : false;
   const updates = preserveAccountIdentity
     ? buildFlowRegistrationEmailStateUpdates(currentState, {
         currentEmail: email,
@@ -4048,6 +4052,7 @@ async function setEmailStateSilently(email, options = {}) {
         source: options?.source || '',
       });
   const normalizedEmail = updates.email;
+  updates.normalHeroEmailRuntime = nextNormalHeroEmailRuntime;
 
   if (!preserveAccountIdentity && normalizedEmail) {
     updates.accountIdentifierType = 'email';
@@ -4084,8 +4089,17 @@ async function persistRegistrationEmailState(state = null, email, options = {}) 
     : await getState();
   const normalizedEmail = String(email || '').trim() || null;
   const currentEmail = String(currentState?.email || '').trim() || null;
+  const nextNormalHeroEmailRuntime = options?.normalHeroEmailRuntime !== undefined
+    ? Boolean(options.normalHeroEmailRuntime)
+    : false;
   if (!Boolean(options?.preserveAccountIdentity)) {
     if (normalizedEmail === currentEmail) {
+      if (currentState?.normalHeroEmailRuntime === nextNormalHeroEmailRuntime) {
+        return;
+      }
+      const updates = { normalHeroEmailRuntime: nextNormalHeroEmailRuntime };
+      await setState(updates);
+      broadcastDataUpdate(updates);
       return;
     }
     await setEmailState(normalizedEmail, options);
@@ -4095,12 +4109,14 @@ async function persistRegistrationEmailState(state = null, email, options = {}) 
   const updates = normalizedEmail === currentEmail
     ? (() => {
         const preservedPhoneIdentity = getPreservedPhoneIdentity(currentState);
-        return preservedPhoneIdentity
+        const preservedUpdates = preservedPhoneIdentity
           ? {
               phoneNumber: '',
               ...preservedPhoneIdentity,
             }
           : {};
+        preservedUpdates.normalHeroEmailRuntime = nextNormalHeroEmailRuntime;
+        return preservedUpdates;
       })()
     : buildFlowRegistrationEmailStateUpdates(currentState, {
         currentEmail: normalizedEmail,
@@ -4108,6 +4124,7 @@ async function persistRegistrationEmailState(state = null, email, options = {}) 
         preserveAccountIdentity: true,
         source: options?.source || '',
       });
+  updates.normalHeroEmailRuntime = nextNormalHeroEmailRuntime;
 
   if (!Object.keys(updates).length || !statePatchHasChanges(currentState, updates)) {
     return;

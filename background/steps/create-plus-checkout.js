@@ -1134,6 +1134,7 @@ function FindProxyForURL(url, host) {
           source,
           updatedAt: Date.now(),
         },
+        normalHeroEmailRuntime: source === 'normal_hero_checkout',
       };
     }
 

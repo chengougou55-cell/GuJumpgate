@@ -362,6 +362,7 @@ test('hosted checkout ignores stale Hero email outside Normal Hero mode', async 
         source: 'normal_hero_start',
         updatedAt: 1,
       },
+      normalHeroEmailRuntime: true,
       hostedCheckoutPhoneNumber: '5551112222',
     }),
     chrome: {
@@ -414,6 +415,40 @@ test('xiaohongshu hosted checkout does not reuse stale registration email', asyn
   assert.match(profile.email, /^[a-z0-9]{16}@gmail\.com$/);
 });
 
+test('xiaohongshu hosted checkout ignores Hero email after bind-email source changes', async () => {
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+    getState: async () => ({
+      xiaohongshuModeEnabled: true,
+      normalHeroModeEnabled: false,
+      manualSignupPhoneSmsEnabled: false,
+      email: 'bound-hero@example.com',
+      normalHeroEmailRuntime: true,
+      registrationEmailState: {
+        current: 'bound-hero@example.com',
+        previous: 'herouser@example.com',
+        source: 'bind_email',
+        updatedAt: 2,
+      },
+      hostedCheckoutPhoneNumber: '5551112222',
+    }),
+    chrome: {
+      storage: {
+        local: {
+          get: async () => ({}),
+        },
+      },
+    },
+  });
+
+  const config = await executor.__test.getHostedCheckoutRuntimeConfig({ ensureEmail: true });
+  const profile = executor.__test.buildHostedCheckoutGuestProfile({}, config);
+
+  assert.equal(config.email, '');
+  assert.notEqual(profile.email, 'bound-hero@example.com');
+  assert.match(profile.email, /^[a-z0-9]{16}@gmail\.com$/);
+});
+
 test('hosted checkout prompts for Hero email when payment page lacks email', async () => {
   const patches = [];
   const requests = [];
@@ -454,8 +489,29 @@ test('hosted checkout prompts for Hero email when payment page lacks email', asy
       source: 'normal_hero_checkout',
       updatedAt: patches[0].registrationEmailState.updatedAt,
     },
+    normalHeroEmailRuntime: true,
     manualAddEmailInputRequired: true,
   });
+});
+
+test('hosted checkout email patch clears stale Hero runtime outside Hero checkout source', async () => {
+  const patches = [];
+  const executor = globalThis.MultiPageBackgroundPlusCheckoutCreate.createPlusCheckoutCreateExecutor({
+    enableTestHooks: true,
+    requestManualAddEmailInput: async () => 'fresh-checkout@example.com',
+    setState: async (patch) => patches.push(patch),
+  });
+
+  const email = await executor.__test.ensureHostedCheckoutEmail({
+    normalHeroModeEnabled: true,
+    signupPhoneNumber: '+57 (324) 132 10 49',
+    normalHeroEmailRuntime: true,
+  }, { source: 'hosted_checkout' });
+
+  assert.equal(email, 'fresh-checkout@example.com');
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0].normalHeroEmailRuntime, false);
+  assert.equal(patches[0].registrationEmailState.source, 'hosted_checkout');
 });
 
 test('hosted checkout automation sends Hero startup email to PayPal flow', async () => {

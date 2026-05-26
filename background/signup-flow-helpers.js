@@ -323,7 +323,8 @@
     function isNormalHeroRegistrationEmailState(state = {}) {
       const source = String(state?.registrationEmailState?.source || '').trim().toLowerCase();
       return Boolean(
-        state?.manualAddEmailInputRequired
+        state?.normalHeroEmailRuntime
+        || state?.manualAddEmailInputRequired
         || source === 'normal_hero_start'
         || source === 'normal_hero_checkout'
       );
@@ -347,6 +348,7 @@
           source: '',
           updatedAt: 0,
         },
+        normalHeroEmailRuntime: false,
         manualAddEmailInputRequired: false,
       };
     }
