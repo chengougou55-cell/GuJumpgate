@@ -572,6 +572,7 @@ const modalOptionText = document.getElementById('modal-option-text');
 const btnAutoStartClose = document.getElementById('btn-auto-start-close');
 const btnAutoStartCancel = document.getElementById('btn-auto-start-cancel');
 const btnAutoStartRestart = document.getElementById('btn-auto-start-restart');
+const btnAutoStartExtra = document.getElementById('btn-auto-start-extra');
 const btnAutoStartContinue = document.getElementById('btn-auto-start-continue');
 const autoHintText = document.querySelector('.auto-hint');
 const stepsList = document.querySelector('.steps-list');
@@ -1866,7 +1867,7 @@ function setActionModalMessageContent({ text = '', html = '' } = {}) {
 }
 
 function resetActionModalButtons() {
-  const buttons = [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartContinue];
+  const buttons = [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartExtra, btnAutoStartContinue];
   buttons.forEach((button) => {
     if (!button) return;
     button.hidden = true;
@@ -1966,7 +1967,7 @@ function configureActionModalAutoSelect(autoSelect) {
   const revision = modalAutoSelectRevision;
   const startedAt = Date.now();
   const action = currentModalActions.find((item) => String(item?.id || '').trim() === actionId);
-  const button = [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartContinue]
+  const button = [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartExtra, btnAutoStartContinue]
     .find((item) => item && item.textContent === action?.label);
   const label = String(action?.label || '').trim();
   const renderCountdown = () => {
@@ -2003,7 +2004,9 @@ function openActionModal({ title, message, messageHtml, actions, option, alert, 
   modalResultBuilder = typeof buildResult === 'function' ? buildResult : null;
   const buttonSlots = currentModalActions.length <= 2
     ? [btnAutoStartCancel, btnAutoStartContinue]
-    : [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartContinue];
+    : (currentModalActions.length === 3
+      ? [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartContinue]
+      : [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartExtra, btnAutoStartContinue]);
   buttonSlots.forEach((button, index) => {
     configureActionModalButton(button, currentModalActions[index]);
   });

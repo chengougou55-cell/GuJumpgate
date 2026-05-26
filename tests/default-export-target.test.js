@@ -177,6 +177,8 @@ test('PayPal hosted checkout dialog auto retries after 15 seconds', () => {
 });
 
 test('xiaohongshu auto mode starts at checkout and keeps session import tail', () => {
+  const sidepanelHtml = readProjectFile('sidepanel/sidepanel.html');
+  const sidepanelCss = readProjectFile('sidepanel/sidepanel.css');
   const sidepanelScript = readProjectFile('sidepanel/sidepanel.js');
   const routerScript = readProjectFile('background/message-router.js');
   const checkoutScript = readProjectFile('background/steps/create-plus-checkout.js');
@@ -191,6 +193,11 @@ test('xiaohongshu auto mode starts at checkout and keeps session import tail', (
   assert.match(sidepanelScript, /xiaohongshu 是小红书模式专用分组，普通模式不能添加/);
   assert.match(sidepanelScript, /function openAutoRunModeDialog\(\)/);
   assert.match(sidepanelScript, /小红书模式会跳过前置注册\/登录/);
+  assert.match(sidepanelHtml, /id="btn-auto-start-extra"/);
+  assert.match(sidepanelCss, /\.modal-actions \{[\s\S]*flex-wrap: wrap;/);
+  assert.match(sidepanelScript, /btnAutoStartExtra/);
+  assert.match(sidepanelScript, /btnAutoStartCancel,\s*btnAutoStartRestart,\s*btnAutoStartExtra,\s*btnAutoStartContinue/);
+  assert.match(sidepanelScript, /id: 'normal', label: '普通模式'/);
   assert.match(sidepanelScript, /type:\s*'AUTO_RUN_XIAOHONGSHU'/);
   assert.match(sidepanelScript, /function openXiaohongshuAccessTokenDialog\(\)/);
   assert.match(sidepanelScript, /extractAccessTokenFromInput\(result\.accessToken\)/);
