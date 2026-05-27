@@ -191,6 +191,12 @@ test('xiaohongshu auto mode starts at checkout and keeps session import tail', (
 
   assert.match(sidepanelScript, /const XIAOHONGSHU_SUB2API_GROUP_NAME = 'xiaohongshu';/);
   assert.match(sidepanelScript, /xiaohongshu 是小红书模式专用分组，普通模式不能添加/);
+  assert.match(sidepanelScript, /NORMAL_HERO_LAST_PHONE_STORAGE_KEY/);
+  assert.match(sidepanelScript, /NORMAL_HERO_LAST_EMAIL_STORAGE_KEY/);
+  assert.match(sidepanelScript, /XIAOHONGSHU_LAST_ACCESS_TOKEN_STORAGE_KEY/);
+  assert.doesNotMatch(sidepanelScript, /XIAOHONGSHU_LAST_ACCESS_TOKEN_INPUT_STORAGE_KEY/);
+  assert.match(sidepanelScript, /function readRememberedDialogValue\(storageKey\)/);
+  assert.match(sidepanelScript, /function writeRememberedDialogValue\(storageKey, value = ''\)/);
   assert.match(sidepanelScript, /function openAutoRunModeDialog\(\)/);
   assert.match(sidepanelScript, /小红书模式会跳过前置注册\/登录/);
   assert.match(sidepanelHtml, /id="btn-auto-start-extra"/);
@@ -199,7 +205,18 @@ test('xiaohongshu auto mode starts at checkout and keeps session import tail', (
   assert.match(sidepanelScript, /btnAutoStartCancel,\s*btnAutoStartRestart,\s*btnAutoStartExtra,\s*btnAutoStartContinue/);
   assert.match(sidepanelScript, /id: 'normal', label: '普通模式'/);
   assert.match(sidepanelScript, /type:\s*'AUTO_RUN_XIAOHONGSHU'/);
+  assert.match(sidepanelScript, /initialValues:\s*\{\n\s*phoneNumber: rememberedPhoneNumber,\n\s*email: rememberedEmail,/);
+  assert.match(sidepanelScript, /writeRememberedDialogValue\(NORMAL_HERO_LAST_PHONE_STORAGE_KEY, phoneNumber\);/);
+  assert.match(sidepanelScript, /writeRememberedDialogValue\(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY, email\);/);
+  assert.match(sidepanelScript, /async function openNormalHeroAddEmailDialog\(options = \{\}\)[\s\S]*readRememberedDialogValue\(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY\)/);
+  assert.match(sidepanelScript, /async function openNormalHeroAddEmailDialog\(options = \{\}\)[\s\S]*initialValues:\s*\{\n\s*email: rememberedEmail,/);
+  assert.match(sidepanelScript, /async function openNormalHeroAddEmailDialog\(options = \{\}\)[\s\S]*writeRememberedDialogValue\(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY, email\);/);
   assert.match(sidepanelScript, /function openXiaohongshuAccessTokenDialog\(\)/);
+  assert.match(sidepanelScript, /const rememberedAccessToken = extractAccessTokenFromInput\(/);
+  assert.match(sidepanelScript, /initialValues:\s*\{\n\s*accessToken: rememberedAccessToken,/);
+  assert.match(sidepanelScript, /仅保存在本机侧边栏用于下次预填/);
+  assert.match(sidepanelScript, /writeRememberedDialogValue\(XIAOHONGSHU_LAST_ACCESS_TOKEN_STORAGE_KEY, accessToken\);/);
+  assert.doesNotMatch(sidepanelScript, /writeRememberedDialogValue\(XIAOHONGSHU_LAST_ACCESS_TOKEN_STORAGE_KEY, result\.accessToken\);/);
   assert.match(sidepanelScript, /extractAccessTokenFromInput\(result\.accessToken\)/);
   assert.match(routerScript, /case 'AUTO_RUN_XIAOHONGSHU':/);
   assert.match(routerScript, /const startNodeId = 'plus-checkout-create';/);

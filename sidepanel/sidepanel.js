@@ -857,6 +857,9 @@ const AUTO_SKIP_FAILURES_PROMPT_DISMISSED_STORAGE_KEY = 'multipage-auto-skip-fai
 const AUTO_RUN_FALLBACK_RISK_PROMPT_DISMISSED_STORAGE_KEY = 'multipage-auto-run-fallback-risk-prompt-dismissed';
 const CPA_PHONE_SIGNUP_PROMPT_DISMISSED_STORAGE_KEY = 'multipage-cpa-phone-signup-prompt-dismissed';
 const CLOUDFLARE_TEMP_EMAIL_REGISTRATION_LOOKUP_PROMPT_DISMISSED_STORAGE_KEY = 'multipage-cloudflare-temp-email-registration-lookup-prompt-dismissed';
+const NORMAL_HERO_LAST_PHONE_STORAGE_KEY = 'multipage-normal-hero-last-phone';
+const NORMAL_HERO_LAST_EMAIL_STORAGE_KEY = 'multipage-normal-hero-last-email';
+const XIAOHONGSHU_LAST_ACCESS_TOKEN_STORAGE_KEY = 'multipage-xiaohongshu-last-access-token';
 const CPA_PHONE_SIGNUP_WARNING_MESSAGE = 'CPA 未适配手机号注册模式，认证成功后无法使用。请使用 SUB2API，或者认证成功后重新登录一遍进行解决。';
 const PHONE_VERIFICATION_SECTION_EXPANDED_STORAGE_KEY = 'multipage-phone-verification-section-expanded';
 let phoneVerificationSectionExpanded = false;
@@ -2226,6 +2229,27 @@ function setPromptDismissed(storageKey, dismissed) {
     localStorage.setItem(storageKey, '1');
   } else {
     localStorage.removeItem(storageKey);
+  }
+}
+
+function readRememberedDialogValue(storageKey) {
+  try {
+    return String(window.localStorage?.getItem(storageKey) || '').trim();
+  } catch (err) {
+    return '';
+  }
+}
+
+function writeRememberedDialogValue(storageKey, value = '') {
+  try {
+    const normalized = String(value || '').trim();
+    if (normalized) {
+      window.localStorage?.setItem(storageKey, normalized);
+    } else {
+      window.localStorage?.removeItem(storageKey);
+    }
+  } catch (err) {
+    // Remembered dialog values are only a convenience; ignore storage failures.
   }
 }
 
@@ -14253,21 +14277,36 @@ async function openNormalHeroPhoneDialog() {
 }
 
 async function openNormalHeroStartDialog() {
+  const rememberedPhoneNumber = normalizeManualPhoneNumberInput(
+    readRememberedDialogValue(NORMAL_HERO_LAST_PHONE_STORAGE_KEY)
+  );
+  const rememberedEmail = normalizeManualEmailInput(
+    readRememberedDialogValue(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY)
+  );
   if (!sharedFormDialog?.open) {
     const phoneNumber = normalizeManualPhoneNumberInput(
-      window.prompt?.('请输入手机号，例如 +57 (324) 132 10 49') || ''
+      window.prompt?.('请输入手机号，例如 +57 (324) 132 10 49', rememberedPhoneNumber) || ''
     );
     if (!phoneNumber) {
       return null;
     }
     const email = normalizeManualEmailInput(
-      window.prompt?.('请输入后续绑定和支付要使用的邮箱') || ''
+      window.prompt?.('请输入后续绑定和支付要使用的邮箱', rememberedEmail) || ''
     );
-    return email ? { phoneNumber, email } : null;
+    if (!email) {
+      return null;
+    }
+    writeRememberedDialogValue(NORMAL_HERO_LAST_PHONE_STORAGE_KEY, phoneNumber);
+    writeRememberedDialogValue(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY, email);
+    return { phoneNumber, email };
   }
   const result = await sharedFormDialog.open({
     title: '普通Hero',
     message: '请输入注册手机号和后续绑定、支付要使用的邮箱。',
+    initialValues: {
+      phoneNumber: rememberedPhoneNumber,
+      email: rememberedEmail,
+    },
     fields: [{
       key: 'phoneNumber',
       label: '手机号',
@@ -14298,7 +14337,12 @@ async function openNormalHeroStartDialog() {
   }
   const phoneNumber = normalizeManualPhoneNumberInput(result.phoneNumber);
   const email = normalizeManualEmailInput(result.email);
-  return phoneNumber && email ? { phoneNumber, email } : null;
+  if (!phoneNumber || !email) {
+    return null;
+  }
+  writeRememberedDialogValue(NORMAL_HERO_LAST_PHONE_STORAGE_KEY, phoneNumber);
+  writeRememberedDialogValue(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY, email);
+  return { phoneNumber, email };
 }
 
 async function openNormalHeroSmsCodeDialog(options = {}) {
@@ -14356,15 +14400,25 @@ async function openNormalHeroEmailCodeDialog(options = {}) {
 }
 
 async function openNormalHeroAddEmailDialog(options = {}) {
+  const rememberedEmail = normalizeManualEmailInput(
+    readRememberedDialogValue(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY)
+  );
   if (!sharedFormDialog?.open) {
-    const fallback = window.prompt?.('请输入要添加的邮箱') || '';
-    return normalizeManualEmailInput(fallback);
+    const fallback = window.prompt?.('请输入要添加的邮箱', rememberedEmail) || '';
+    const email = normalizeManualEmailInput(fallback);
+    if (email) {
+      writeRememberedDialogValue(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY, email);
+    }
+    return email;
   }
   const phoneNumber = String(options.phoneNumber || latestState?.signupPhoneNumber || '').trim();
   const result = await sharedFormDialog.open({
     title: String(options.title || '').trim() || '普通Hero添加邮箱',
     message: String(options.message || '').trim()
       || (phoneNumber ? `请输入要绑定到 ${phoneNumber} 的邮箱。` : '请输入要添加到当前账号的邮箱。'),
+    initialValues: {
+      email: rememberedEmail,
+    },
     fields: [{
       key: 'email',
       label: '邮箱',
@@ -14379,22 +14433,36 @@ async function openNormalHeroAddEmailDialog(options = {}) {
     }],
     confirmLabel: '提交邮箱',
   });
-  return result ? normalizeManualEmailInput(result.email) : '';
+  const email = result ? normalizeManualEmailInput(result.email) : '';
+  if (email) {
+    writeRememberedDialogValue(NORMAL_HERO_LAST_EMAIL_STORAGE_KEY, email);
+  }
+  return email;
 }
 
 async function openXiaohongshuAccessTokenDialog() {
+  const rememberedAccessToken = extractAccessTokenFromInput(
+    readRememberedDialogValue(XIAOHONGSHU_LAST_ACCESS_TOKEN_STORAGE_KEY)
+  );
   if (!sharedFormDialog?.open) {
-    const fallback = window.prompt?.('粘贴 /api/auth/session 返回里的 accessToken') || '';
-    return extractAccessTokenFromInput(fallback);
+    const fallback = window.prompt?.('粘贴 /api/auth/session 返回里的 accessToken', rememberedAccessToken) || '';
+    const accessToken = extractAccessTokenFromInput(fallback);
+    if (accessToken) {
+      writeRememberedDialogValue(XIAOHONGSHU_LAST_ACCESS_TOKEN_STORAGE_KEY, accessToken);
+    }
+    return accessToken;
   }
   const result = await sharedFormDialog.open({
     title: '小红书模式',
     message: '粘贴 /api/auth/session 返回里的 accessToken，也可以直接粘贴完整 JSON。',
     alert: {
-      text: 'accessToken 属于敏感凭据，只会用于本次创建长链和后续 SESSION 导入。',
+      text: 'accessToken 属于敏感凭据，会仅保存在本机侧边栏用于下次预填，并用于创建长链和后续 SESSION 导入。',
       tone: 'info',
     },
     confirmLabel: '开始',
+    initialValues: {
+      accessToken: rememberedAccessToken,
+    },
     fields: [{
       key: 'accessToken',
       label: 'accessToken',
@@ -14410,7 +14478,11 @@ async function openXiaohongshuAccessTokenDialog() {
   if (!result) {
     return '';
   }
-  return extractAccessTokenFromInput(result.accessToken);
+  const accessToken = extractAccessTokenFromInput(result.accessToken);
+  if (accessToken) {
+    writeRememberedDialogValue(XIAOHONGSHU_LAST_ACCESS_TOKEN_STORAGE_KEY, accessToken);
+  }
+  return accessToken;
 }
 
 async function startXiaohongshuAutoRunFromCurrentSettings() {
