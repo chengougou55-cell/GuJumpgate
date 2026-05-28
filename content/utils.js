@@ -499,6 +499,11 @@ function simulateClick(el) {
     ? getActivationStrategy({
       tagName: el.tagName,
       type: el.getAttribute?.('type') || el.type || '',
+      name: el.getAttribute?.('name') || el.name || '',
+      value: el.getAttribute?.('value') || el.value || '',
+      text: el.textContent || '',
+      ariaLabel: el.getAttribute?.('aria-label') || '',
+      title: el.getAttribute?.('title') || '',
       hasForm: Boolean(form),
       pathname: location.pathname || '',
     })

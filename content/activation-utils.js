@@ -18,6 +18,25 @@
     return String(pathname || '').trim().toLowerCase();
   }
 
+  function normalizeActionText(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function isEmailVerificationResendAction(target = {}) {
+    const text = normalizeActionText([
+      target.text,
+      target.value,
+      target.ariaLabel,
+      target.title,
+    ].filter(Boolean).join(' '));
+    const name = String(target.name || '').trim().toLowerCase();
+    const value = String(target.value || '').trim().toLowerCase();
+    if (name === 'intent' && value === 'resend') {
+      return true;
+    }
+    return /重新发送|再次发送|重发|未收到|resend|send (?:a )?new|send (?:it )?again|request (?:a )?new|didn'?t receive/i.test(text);
+  }
+
   function getActivationStrategy(target = {}) {
     const tagName = normalizeTagName(target.tagName);
     const type = normalizeType(target.type);
@@ -31,6 +50,9 @@
       );
 
     if (isSubmitButton && isEmailVerificationRoute) {
+      if (isEmailVerificationResendAction(target)) {
+        return { method: 'click' };
+      }
       return { method: 'requestSubmit' };
     }
 
@@ -60,6 +82,7 @@
 
   return {
     getActivationStrategy,
+    isEmailVerificationResendAction,
     isRecoverableStep9AuthFailure,
   };
 });

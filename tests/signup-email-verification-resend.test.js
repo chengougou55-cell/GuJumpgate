@@ -7,6 +7,8 @@ const repoRoot = path.resolve(__dirname, '..');
 const signupPageSource = fs.readFileSync(path.join(repoRoot, 'content/signup-page.js'), 'utf8');
 const fetchSignupCodeSource = fs.readFileSync(path.join(repoRoot, 'background/steps/fetch-signup-code.js'), 'utf8');
 const signupFlowHelpersSource = fs.readFileSync(path.join(repoRoot, 'background/signup-flow-helpers.js'), 'utf8');
+const activationUtilsSource = fs.readFileSync(path.join(repoRoot, 'content/activation-utils.js'), 'utf8');
+const contentUtilsSource = fs.readFileSync(path.join(repoRoot, 'content/utils.js'), 'utf8');
 
 test('signup email-verification page clicks resend email twice before polling', () => {
   assert.match(signupPageSource, /SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT = 2/);
@@ -28,6 +30,10 @@ test('signup email-verification page clicks resend email twice before polling', 
   assert.match(signupPageSource, /accountIdentifier = String\(/);
   assert.match(signupPageSource, /clickEmailVerificationExtraResends\(4, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT, \{\n\s+identifier: accountIdentifier,/);
   assert.match(signupPageSource, /const extraResendResult = await clickEmailVerificationExtraResends\(4, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT, \{\n\s+identifier: accountIdentifier,\n\s+\}\);\n\s+if \(shouldWaitForSignupVerificationCodeTarget\(\)\) \{\n\s+await waitForVerificationCodeTarget\(15000\);/);
+  assert.match(activationUtilsSource, /function isEmailVerificationResendAction\(target = \{\}\)/);
+  assert.match(activationUtilsSource, /if \(isEmailVerificationResendAction\(target\)\) \{\n\s+return \{ method: 'click' \};\n\s+\}/);
+  assert.match(contentUtilsSource, /text: el\.textContent \|\| '',/);
+  assert.match(contentUtilsSource, /ariaLabel: el\.getAttribute\?\.\('aria-label'\) \|\| '',/);
   assert.match(signupPageSource, /extraEmailVerificationResendClicked/);
   assert.match(signupPageSource, /extraEmailVerificationResendLastRequestedAt/);
   assert.match(fetchSignupCodeSource, /accountIdentifier: state\.accountIdentifier \|\| state\.email \|\| state\.phoneNumber \|\| ''/);
