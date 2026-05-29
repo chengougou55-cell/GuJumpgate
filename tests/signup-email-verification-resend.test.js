@@ -31,7 +31,10 @@ test('signup email-verification page clicks resend email twice before polling', 
   assert.match(signupPageSource, /clickEmailVerificationExtraResends\(4, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT, \{\n\s+identifier: accountIdentifier,/);
   assert.match(signupPageSource, /const extraResendResult = await clickEmailVerificationExtraResends\(4, SIGNUP_EMAIL_VERIFICATION_EXTRA_RESEND_COUNT, \{\n\s+identifier: accountIdentifier,\n\s+\}\);\n\s+if \(shouldWaitForSignupVerificationCodeTarget\(\)\) \{\n\s+await waitForVerificationCodeTarget\(15000\);/);
   assert.match(activationUtilsSource, /function isEmailVerificationResendAction\(target = \{\}\)/);
-  assert.match(activationUtilsSource, /if \(isEmailVerificationResendAction\(target\)\) \{\n\s+return \{ method: 'click' \};\n\s+\}/);
+  assert.match(activationUtilsSource, /if \(isEmailVerificationResendAction\(target\)\) \{\n\s+return \{ method: 'dispatchClick' \};\n\s+\}/);
+  assert.match(contentUtilsSource, /method === 'dispatchClick'/);
+  assert.match(contentUtilsSource, /const preventDefaultClick = \(event\) => \{\n\s+event\.preventDefault\(\);\n\s+\};/);
+  assert.match(contentUtilsSource, /addEventListener\('click', preventDefaultClick, \{ capture: true, once: true \}\)/);
   assert.match(contentUtilsSource, /text: el\.textContent \|\| '',/);
   assert.match(contentUtilsSource, /ariaLabel: el\.getAttribute\?\.\('aria-label'\) \|\| '',/);
   assert.match(signupPageSource, /extraEmailVerificationResendClicked/);

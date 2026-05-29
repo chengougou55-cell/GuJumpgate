@@ -6,14 +6,14 @@ const {
   isEmailVerificationResendAction,
 } = require('../content/activation-utils.js');
 
-test('email-verification resend action uses click instead of requestSubmit', () => {
+test('email-verification resend action dispatches click without form submit', () => {
   assert.deepEqual(getActivationStrategy({
     tagName: 'button',
     type: 'submit',
     hasForm: true,
     pathname: '/email-verification',
     text: '重新发送电子邮件',
-  }), { method: 'click' });
+  }), { method: 'dispatchClick' });
 
   assert.deepEqual(getActivationStrategy({
     tagName: 'button',
@@ -22,7 +22,7 @@ test('email-verification resend action uses click instead of requestSubmit', () 
     pathname: '/email-verification',
     name: 'intent',
     value: 'resend',
-  }), { method: 'click' });
+  }), { method: 'dispatchClick' });
 });
 
 test('email-verification non-resend submit still uses requestSubmit', () => {

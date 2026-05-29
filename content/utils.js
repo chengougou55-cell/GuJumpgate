@@ -513,6 +513,16 @@ function simulateClick(el) {
 
   if (method === 'requestSubmit' && form && typeof form.requestSubmit === 'function') {
     form.requestSubmit(el);
+  } else if (method === 'dispatchClick') {
+    const preventDefaultClick = (event) => {
+      event.preventDefault();
+    };
+    el.addEventListener('click', preventDefaultClick, { capture: true, once: true });
+    try {
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    } finally {
+      el.removeEventListener('click', preventDefaultClick, { capture: true });
+    }
   } else if (typeof el.click === 'function') {
     method = 'click';
     el.click();

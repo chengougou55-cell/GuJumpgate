@@ -51,7 +51,7 @@
 
     if (isSubmitButton && isEmailVerificationRoute) {
       if (isEmailVerificationResendAction(target)) {
-        return { method: 'click' };
+        return { method: 'dispatchClick' };
       }
       return { method: 'requestSubmit' };
     }
